@@ -1,0 +1,13 @@
+name = "DLRM"
+uuid = "ce338653-15c3-4a84-8981-952a97281d0c"
+authors = ["Mark Hildebrand <mhildebrand@ucdavis.edu>"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
