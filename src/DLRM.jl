@@ -12,6 +12,7 @@ import GZip
 import MappedArrays
 using NNlib
 using ProgressMeter
+import PrettyTables
 
 include("embedding.jl")
 include("interact.jl")
