@@ -13,6 +13,7 @@ import MappedArrays
 using NNlib
 using ProgressMeter
 import PrettyTables
+import Zygote
 
 include("embedding.jl")
 include("interact.jl")

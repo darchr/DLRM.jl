@@ -31,15 +31,17 @@ struct DLRMModel{B,E <: AbstractEmbedding,I,T}
     top_mlp::T
 end
 
+Flux.@functor DLRMModel (bottom_mlp, embeddings, top_mlp)
+
 function (D::DLRMModel)(dense, sparse)
     x = D.bottom_mlp(dense)
-    @time tasks = map(D.embeddings, sparse) do E, I
-        Threads.@spawn E($+, I)
-    end
-    @time y = fetch.(tasks)
-    #@time y = map(D.embeddings, sparse) do E, I
-    #    return E(+, I)
+    #@time tasks = map(D.embeddings, sparse) do E, I
+    #    Threads.@spawn E($+, I)
     #end
+    #@time y = fetch.(tasks)
+    y = map(D.embeddings, sparse) do E, I
+        return E(I)
+    end
     z = D.interaction(x, y)
     return D.top_mlp(z)
 end
