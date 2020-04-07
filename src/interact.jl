@@ -1,14 +1,16 @@
 # Do this weird dot-product interaction thingie.
 function dot_interaction(X, Ys)
-    @show size(X)
     d, batchsize = size(X)
 
     # Merge the two into a single array so we can use the fast "vcat" in Base.
-    combined = reduce(vcat, vcat([X], Ys))
+    combined = vcat(X, Ys...)
 
     # TODO: Make sure the order of this is correct.
     T = reshape(combined, :, d, batchsize)
-    Z = NNlib.batched_mul(T, NNlib.batched_transpose(T))
+
+    # TODO: NNlib eventually will have a more efficient version of this.
+    TT = permutedims(T, (2,1,3))
+    Z = NNlib.batched_mul(T, TT)
 
     # Slice out triangular indices of Z into a single 2D slice
     Zflat = triangular_slice(Z)
@@ -20,22 +22,26 @@ function triangular_slice(X::AbstractArray{T,3}) where {T}
     # Compute the output size - don't do self interaction be default
 
     # First dimension is the batch size
-    batchsize = size(X, 1)
+    batchsize = size(X, 3)
 
     # Number of columns computed by counting the number of entries in the lower
     # triangle
-    sz1 = size(X, 2)
-    ncols = div((sz1 * sz1) - sz1, 2)
+    sz = size(X, 2)
+    ncols = div((sz * sz) - sz, 2)
 
-    O = similar(X, eltype(X), batchsize, ncols)
-    row = 1
-    @inbounds for j in 1:(sz1-1), i in (j+1):sz1
-        # Again, descend to pointer madness because views aren't good enough.
-        Xindex = batchsize * (sz1 * (j - 1) + i - 1) + 1
-        Oindex = batchsize * (row - 1) + 1
-        #unsafe_copyto!(O, Oindex, X, Xindex, batchsize)
-        copyto!(O, Oindex, X, Xindex, batchsize)
-        row += 1
+    O = similar(X, eltype(X), ncols, batchsize)
+    for batch in 0:(batchsize-1)
+        Xbase = batch * sz * sz
+        Obase = batch * ncols
+        row = 1
+        @inbounds for i in 1:(sz-1)
+            Xindex = sz * (i-1) + i + 1 + Xbase
+            Oindex = row + Obase
+            elements_copied = sz - i
+            #unsafe_copyto!(O, Oindex, X, Xindex, batchsize)
+            copyto!(O, Oindex, X, Xindex, elements_copied)
+            row += elements_copied
+        end
     end
     return O
 end
@@ -44,29 +50,27 @@ end
 # We'll return a symmetric matrix of the result.
 function triangular_slice_adjoint(Δ, sz::NTuple{3, Int})
     A = similar(Δ, eltype(Δ), sz)
-    batchsize = sz[1]
+    batchsize = sz[3]
     nrows = sz[2]
-    @inbounds for j in axes(A,3), i in axes(A,2)
-        # Fast case - fill diagonal with zeros
-        if i == j
-            for k in 1:batchsize
-                A[k,i,j] = zero(eltype(Δ))
+    for batch in 1:batchsize
+        for j in axes(A,2), i in axes(A,1)
+            # Fast case - fill diagonal with zeros
+            if i == j
+                A[i,j,batch] = zero(eltype(Δ))
+                continue
             end
-            continue
-        end
 
-        # Index computation galore!
-        Δindex = begin
-            a, b = (i > j) ? (i,j) : (j,i)
+            # Index computation galore!
+            Δindex = begin
+                a, b = (i > j) ? (i,j) : (j,i)
 
-            # This is some indexing magic.
-            # See the explanation below for why this shit works.
-            start = ( (b-1) * (2 * nrows - b) ) >> 1
-            batchsize * (start + (a - b - 1)) + 1
+                # This is some indexing magic.
+                # See the explanation below for why this shit works.
+                start = ( (b-1) * (2 * nrows - b) ) >> 1 
+                start + (a - b)
+            end
+            A[i,j,batch] = Δ[Δindex,batch]
         end
-        Aindex = batchsize * (nrows * (j - 1) + (i - 1)) + 1
-        #unsafe_copyto!(A, Aindex, Δ, Δindex, batchsize)
-        copyto!(A, Aindex, Δ, Δindex, batchsize)
     end
     return A
 end

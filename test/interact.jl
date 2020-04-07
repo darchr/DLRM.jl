@@ -2,11 +2,11 @@ function symm(A)
     B = copy(A)
 
     # Zero the diagonal
-    for j in axes(B,3), i in 1:j
+    for j in axes(B,1), i in 1:j
         if i == j
-            B[:,i,i] .= zero(eltype(B))
+            B[i,i,:] .= zero(eltype(B))
         else
-            B[:,i,j] .= B[:,j,i]
+            B[j,i,:] .= B[i,j,:]
         end
     end
     return B
@@ -19,7 +19,7 @@ function default_triangular_slice(A)
     sz = size(A,2)
 
     indices = ((i,j) for j in 1:sz-1 for i in j+1:sz)
-    _A = map(x-> A[:, x[1], x[2]], indices)
+    _A = map(x-> A[x[1], x[2],:], indices)
     return reduce(hcat, _A)
 end
 

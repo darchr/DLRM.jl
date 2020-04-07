@@ -23,6 +23,6 @@ end
 
     # Try to take a gradient
     grads = gradient(params(dlrm)) do
-        forward(dense, sparse, labels)
+        forward(dense, sparse, expected)
     end
 end
