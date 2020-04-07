@@ -33,9 +33,13 @@ end
 
 function (D::DLRMModel)(dense, sparse)
     x = D.bottom_mlp(dense)
-    y = map(D.embeddings, sparse) do E, I
-        return E(+, I)
+    @time tasks = map(D.embeddings, sparse) do E, I
+        Threads.@spawn E($+, I)
     end
+    @time y = fetch.(tasks)
+    #@time y = map(D.embeddings, sparse) do E, I
+    #    return E(+, I)
+    #end
     z = D.interaction(x, y)
     return D.top_mlp(z)
 end
