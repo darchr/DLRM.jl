@@ -56,7 +56,7 @@ function triangular_slice_adjoint(Δ, sz::NTuple{3, Int})
     for batch in 1:batchsize
         for j in axes(A,2), i in axes(A,1)
             # Fast case - fill diagonal with zeros
-            if i == j
+            if i >= j
                 A[i,j,batch] = zero(eltype(Δ))
                 continue
             end

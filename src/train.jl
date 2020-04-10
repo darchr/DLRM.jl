@@ -23,8 +23,10 @@ function (T::TestRun)()
     # Run the test set.
     total = 0
     correct = 0
+    println("Testing")
     @time for (dense, sparse, labels) in T.dataset
-        result = clamp.(T.f(dense, sparse), 0, 1)
+        result = round.(Int, T.f(dense, sparse))
+        labels = clamp.(labels, 0, 1)
 
         # Update the total
         total += length(result)
@@ -34,19 +36,23 @@ function (T::TestRun)()
         correct += count(x -> x[1] == x[2], zip(result, labels))
     end
     println("Iteration: $(T.count)")
-    println("Total: $total")
-    println("Correct: $correct")
     println("Accuracy: $(correct / total)")
     println()
+
+    if div(T.count, T.every) == 3
+        throw(Flux.Optimise.StopException())
+    end
 end
 
 # Routines for training DLRM.
 function top(;
+        debug = false,
         # Percent of the dataset to reserve for testing.
-        testfraction = 0.01,
+        testfraction = 0.1,
         train_batchsize = 128,
-        test_batchsize = 16384,
-        test_frequency = 128,
+        #test_batchsize = 16384,
+        test_batchsize = 128,
+        test_frequency = 10000,
         learning_rate = 0.1,
     )
 
@@ -77,20 +83,38 @@ function top(;
 
     model = kaggle_dlrm()
 
-    loss = (dense, sparse, labels) -> Flux.crossentropy(model(dense, sparse), labels)
-
-    return model, loss, train_loader
-
-    opt = Flux.Descent(learning_rate)
+    loss = (dense, sparse, labels) -> begin
+        # Clamp for stability
+        forward = model(dense, sparse)
+        ls = sum(Flux.binarycrossentropy.(forward, vec(labels))) / length(forward)
+        isnan(ls) && throw(error("NaN Loss"))
+        return ls
+    end
 
     # The inner training loop
     callbacks = [
         TestRun(model, test_loader, 0, test_frequency)
     ]
 
-    Flux.train!(loss, Flux.params(model), train_loader, opt; cb = callbacks)
+    # Warmup
+    opt = Flux.Descent(0.01)
+    count = 1
+    params = Flux.params(model)
+    for (dense, sparse, labels) in train_loader
+        grads = gradient(params) do
+            loss(dense, sparse, labels)
+        end
+        Flux.Optimise.update!(opt, params, grads)
+        count += 1
+        count == 1000 && break
+    end
+    opt = Flux.Descent(learning_rate)
 
-    return model
+    if !debug
+        Flux.train!(loss, Flux.params(model), train_loader, opt; cb = callbacks)
+    end
+
+    return model, loss, train_loader, opt
 end
 
 const KAGGLE_EMBEDDING_SIZES = [

@@ -5,8 +5,8 @@ struct Embedding{A <: AbstractMatrix} <: AbstractEmbedding
     data::A
 end
 
-function embedding_ensemble(E::Vector{Embedding{A}}, I::AbstractMatrix) where {A}
-    return map(E, eachrow(I)) do e,i
+function embedding_ensemble(E::Vector, I::AbstractMatrix) where {A}
+    return map(E, collect(eachrow(I))) do e,i
         embedding_lookup(e.data, i)
     end
 end
@@ -26,31 +26,46 @@ embedding_lookup(A::AbstractMatrix, I) = A[:, I]
 #    return O
 #end
 
-
 # TODO: Make more general so we can pump this through the various optimizers correctly.
 struct LazyEmbeddingUpdate{T <: AbstractVector{<:Integer}, A <: AbstractArray}
     indices::T
     Δ::A
 end
 
-# TODO
-# function Flux.update!(x::AbstractArray, x̄::EmbeddingUpdate)
-#     # Sanity check on sizes
-#     @assert size(x, 1) == length(first(values(x̄.cols)))
-#
-#     # Perform the update
-#     @inbounds for (col, update) in x̄.cols
-#         for row in axes(x, 1)
-#             x[row, col] -= update[row]
-#         end
-#     end
-#     return nothing
-# end
+function lazy_embedding_update(indices, Δ)
+    return LazyEmbeddingUpdate(indices, Δ)
+end
 
-Zygote.@adjoint function embedding_ensemble(E, I)
+function Flux.Optimise.update!(opt, x, x̄::LazyEmbeddingUpdate)
+    return Flux.update!(x, Flux.Optimise.apply!(opt, x, x̄))
+end
+
+function Flux.Optimise.apply!(opt::Flux.Descent, x, Δ::LazyEmbeddingUpdate)
+    Δ.Δ .*= opt.eta
+    return Δ
+end
+
+function Flux.update!(x::AbstractArray, x̄::LazyEmbeddingUpdate)
+    # Perform the update
+    for (col, update) in zip(x̄.indices, eachcol(x̄.Δ))
+        for row in axes(x, 1)
+            x[row, col] -= update[row]
+        end
+    end
+    return nothing
+end
+
+Zygote.@adjoint function embedding_lookup(A, I)
     return (
-        embedding_ensemble(E, I),
-        Δ -> (LazyEmbeddingUpdate.(eachrow(I),Δ), nothing),
+        embedding_lookup(A, I),
+        Δ -> (lazy_embedding_update(I, Δ), nothing),
     )
+    #     Δ -> begin
+    #         println(typeof(Δ))
+    #         embedding_updates = lazy_embedding_update.(eachrow(I), Δ)
+    #         @show typeof(embedding_updates)
+    #         return (embedding_updates, nothing)
+    #     end
+    # )
 end
 
