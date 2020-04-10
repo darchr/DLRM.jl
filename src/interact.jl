@@ -1,9 +1,11 @@
 # Do this weird dot-product interaction thingie.
+_nrows(x) = size(x, 1)
 function dot_interaction(X, Ys)
     d, batchsize = size(X)
 
     # Merge the two into a single array so we can use the fast "vcat" in Base.
     combined = vcat(X, Ys...)
+    #combined = fast_vcat(X, Ys)
 
     # TODO: Make sure the order of this is correct.
     T = reshape(combined, :, d, batchsize)
@@ -17,7 +19,6 @@ function dot_interaction(X, Ys)
     return vcat(X, Zflat)
 end
 
-# TODO: Adjoint
 function triangular_slice(X::AbstractArray{T,3}) where {T}
     # Compute the output size - don't do self interaction be default
 
@@ -66,7 +67,7 @@ function triangular_slice_adjoint(Δ, sz::NTuple{3, Int})
 
                 # This is some indexing magic.
                 # See the explanation below for why this shit works.
-                start = ( (b-1) * (2 * nrows - b) ) >> 1 
+                start = ( (b-1) * (2 * nrows - b) ) >> 1
                 start + (a - b)
             end
             A[i,j,batch] = Δ[Δindex,batch]
@@ -128,12 +129,12 @@ end
 # (b-1)(2N + b) / 2 + (b - a)
 #
 # The last step is to adjust for the batchsize in the first dimension, which yields
-# 
+#
 # batchsize * ( (b-1)(2N+b)/2 + (b-a) - 1 ) + 1
 
-Zygote.@adjoint function triangular_slice(x) 
+Zygote.@adjoint function triangular_slice(x)
     return (
-        triangular_slice(x), 
+        triangular_slice(x),
         Δ -> (triangular_slice_adjoint(Δ, size(x)),),
     )
 end

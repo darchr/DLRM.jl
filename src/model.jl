@@ -6,19 +6,20 @@ function create_mlp(sizes, sigmoid_index)
         out = sizes[i+1]
 
         # Choose between sigmoid or relu activation function.
-        if i == sigmoid_index
-            activation = Flux.σ
-        else
+        if i == sigmoid_index-1
             activation = Flux.sigmoid
+            #activation = identity
+        else
+            activation = Flux.relu
         end
-        push!(layers, Dense(in, out, activation))
+        push!(layers, Dense(in, out, activation; initW = Flux.glorot_normal, initb = Flux.glorot_normal))
     end
     return Chain(layers...)
 end
 
 function create_embeddings(ncols, rowcounts)
     embeddings = map(rowcounts) do nrows
-        data = rand(Float32, ncols, nrows)
+        data = Flux.glorot_normal(ncols, nrows)
         return Embedding(data)
     end
     return embeddings
@@ -39,12 +40,15 @@ function (D::DLRMModel)(dense, sparse)
     #    Threads.@spawn E($+, I)
     #end
     #@time y = fetch.(tasks)
-    y = map(D.embeddings, sparse) do E, I
-        return E(I)
-    end
+    y = embedding_ensemble(D.embeddings, sparse)
+    #y = map(D.embeddings, mayberows(sparse)) do E, I
     z = D.interaction(x, y)
-    return D.top_mlp(z)
+    out = D.top_mlp(z)
+    return vec(out)
 end
+
+mayberows(x::AbstractVector) = x
+mayberows(x::AbstractMatrix) = eachrow(x)
 
 # Test entry point for now.
 function dlrm(
