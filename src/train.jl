@@ -1,12 +1,43 @@
-function extract(A, ::Val{S}) where {S}
-    # Step 1 - create a mapped array
-    mapped = MappedArrays.mappedarray(x -> getproperty(x, S), A)
+mutable struct Extractor{T}
+    data::T
+    batchsize::Int
 
-    # Step 2 - Convert the element type
-    reinterpreted = reinterpret(eltype(first(mapped)), mapped)
+    # Preloaded buffers for storing the data for the next batchsize
+    labels::Vector{Float32}
+    dense::Array{Float32, 2}
+    sparse::Vector{Vector{UInt32}}
+end
 
-    # Setp 3 - Reshape to 2D
-    return reshape(reinterpreted, length(first(mapped)), :)
+function Extractor(data, batchsize)
+    return Extractor(
+        data,
+        batchsize,
+        Array{Float32}(undef, batchsize),
+        Array{Float32}(undef, num_continuous_features(DAC()), batchsize),
+        [Array{UInt32}(undef, batchsize) for _ in 1:num_categorical_features(DAC())],
+    )
+end
+
+function Base.iterate(E::Extractor, index = 1)
+    batchsize = E.batchsize
+
+    # Detect if we've run out of data.
+    if index + batchsize - 1 > length(E.data)
+        return nothing
+    end
+
+    for (count,i) in enumerate(index:index + batchsize - 1)
+        # Access this row of data.
+        row = E.data[i]
+
+        E.labels[count] = row.label
+        E.dense[:,count] .= row.continuous
+
+        for (indices, val) in zip(E.sparse, row.categorical)
+            indices[count] = val
+        end
+    end
+    return (E.dense, E.sparse, E.labels), index + batchsize
 end
 
 mutable struct TestRun{F,D}
@@ -39,7 +70,7 @@ function (T::TestRun)()
     println("Accuracy: $(correct / total)")
     println()
 
-    if div(T.count, T.every) == 3
+    if div(T.count, T.every) == 10
         throw(Flux.Optimise.StopException())
     end
 end
@@ -67,19 +98,8 @@ function top(;
     trainset = @views dataset[1:end-num_test_samples-1]
     testset = @views dataset[end-num_test_samples:end]
 
-    train_loader = Flux.Data.DataLoader(
-        extract(trainset, Val{:continuous}()),
-        extract(trainset, Val{:categorical}()),
-        extract(trainset, Val{:label}());
-        batchsize = train_batchsize,
-    )
-
-    test_loader = Flux.Data.DataLoader(
-        extract(testset, Val{:continuous}()),
-        extract(testset, Val{:categorical}()),
-        extract(testset, Val{:label}());
-        batchsize = test_batchsize,
-    )
+    train_loader = Extractor(trainset, train_batchsize)
+    test_loader = Extractor(testset, test_batchsize)
 
     model = kaggle_dlrm()
 
@@ -98,6 +118,7 @@ function top(;
 
     # Warmup
     opt = Flux.Descent(0.01)
+
     count = 1
     params = Flux.params(model)
     for (dense, sparse, labels) in train_loader

@@ -8,7 +8,6 @@ function create_mlp(sizes, sigmoid_index)
         # Choose between sigmoid or relu activation function.
         if i == sigmoid_index-1
             activation = Flux.sigmoid
-            #activation = identity
         else
             activation = Flux.relu
         end
@@ -27,7 +26,7 @@ end
 function create_embeddings(ncols, rowcounts)
     embeddings = map(rowcounts) do nrows
         data = Flux.glorot_normal(ncols, nrows)
-        return Embedding(data)
+        return SimpleEmbedding(data)
     end
     return embeddings
 end
@@ -41,9 +40,13 @@ end
 
 Flux.@functor DLRMModel (bottom_mlp, embeddings, top_mlp)
 
-function (D::DLRMModel)(dense, sparse)
+function (D::DLRMModel)(dense, sparse::Vector{<:Vector{<:Integer}})
     x = D.bottom_mlp(dense)
-    y = embedding_ensemble(D.embeddings, sparse)
+
+    # TODO: See if we can get around calling "collect" because Zygote
+    # complains about differentiating "Zip"
+    y = map(lookup, D.embeddings, sparse)
+
     z = D.interaction(x, y)
     out = D.top_mlp(z)
     return vec(out)

@@ -5,6 +5,9 @@ using Distributed   # for preprocessing dataset
 using Mmap
 using SparseArrays
 
+# "Internal" dependencies
+using EmbeddingTables
+
 # External Dependencies
 import DataStructures
 using Flux
@@ -17,9 +20,6 @@ import Zygote
 
 # Extra Zygote Adjoints for improving the performance
 # of broadcasting.
-include("adjoints.jl")
-
-include("embedding.jl")
 include("interact.jl")
 
 # Data Utils

@@ -6,6 +6,7 @@ version = "0.1.0"
 [deps]
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+EmbeddingTables = "c151d800-c36a-44cc-9e8c-19173c45605f"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 GZip = "92fee26a-97fe-5a0c-ad85-20a5f3185b63"
 MappedArrays = "dbb5928d-eab1-5f90-85c2-b9b0edb7c900"
