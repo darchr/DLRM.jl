@@ -42,11 +42,7 @@ Flux.@functor DLRMModel (bottom_mlp, embeddings, top_mlp)
 
 function (D::DLRMModel)(dense, sparse::Vector{<:Vector{<:Integer}})
     x = D.bottom_mlp(dense)
-
-    # TODO: See if we can get around calling "collect" because Zygote
-    # complains about differentiating "Zip"
-    y = map(lookup, D.embeddings, sparse)
-
+    y = map(maplookup, D.embeddings, sparse)
     z = D.interaction(x, y)
     out = D.top_mlp(z)
     return vec(out)

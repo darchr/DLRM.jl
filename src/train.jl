@@ -79,10 +79,10 @@ end
 function top(;
         debug = false,
         # Percent of the dataset to reserve for testing.
-        testfraction = 0.1,
+        testfraction = 0.125,
         train_batchsize = 128,
-        #test_batchsize = 16384,
-        test_batchsize = 128,
+        test_batchsize = 16384,
+        #test_batchsize = 128,
         test_frequency = 10000,
         learning_rate = 0.1,
     )
