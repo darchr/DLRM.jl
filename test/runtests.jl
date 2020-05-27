@@ -6,6 +6,7 @@ using Random
 using Flux
 using Zygote
 
-include("embedding.jl")
-include("interact.jl")
-#include("dataset.jl")
+#include("interact.jl")
+include("dataset.jl")
+include("model.jl")
+include("data.jl")

@@ -5,12 +5,10 @@ function dot_interaction(X, Ys)
 
     # Merge the two into a single array so we can use the fast "vcat" in Base.
     combined = vcat(X, Ys...)
-    #combined = fast_vcat(X, Ys)
-
-    # TODO: Make sure the order of this is correct.
     T = reshape(combined, :, d, batchsize)
 
     # TODO: NNlib eventually will have a more efficient version of this.
+    # For now, this is causing significant slowdown ...
     TT = permutedims(T, (2,1,3))
     Z = NNlib.batched_mul(T, TT)
 

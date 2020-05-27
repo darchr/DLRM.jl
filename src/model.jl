@@ -56,7 +56,6 @@ function dlrm(
         embedding_sizes;
         # Default to the `dot` interaction method.
         interaction = dot_interaction,
-        #interaction = (x, y) -> vcat(x, y...)
     )
 
     # Create the bottom MLP
@@ -64,12 +63,14 @@ function dlrm(
     embeddings = create_embeddings(sparse_feature_size, embedding_sizes)
 
     # Compute the size of the first layer for the top mlp.
-    num_features = length(embedding_sizes) + 1
+    num_features = length(embedding_sizes)
     bottom_out_size = last(bottom_mlp_sizes)
-    top_layer_input_size = div((num_features * (num_features - 1)), 2) + bottom_out_size
-    #top_layer_input_size = 432
-    @show num_features
 
+    # Do some math with sizes.
+    @assert iszero(mod(sparse_feature_size * num_features, bottom_out_size))
+    pre_triangle_size = div(sparse_feature_size * num_features, bottom_out_size) + 1
+
+    top_layer_input_size = div(pre_triangle_size^2 - pre_triangle_size, 2) + bottom_out_size
     top_mlp_sizes = vcat([top_layer_input_size], top_mlp_sizes)
     @show top_mlp_sizes
     top_mlp = create_mlp(top_mlp_sizes, lastindex(top_mlp_sizes))

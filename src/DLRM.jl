@@ -11,8 +11,6 @@ using EmbeddingTables
 # External Dependencies
 import DataStructures
 using Flux
-import GZip
-import MappedArrays
 using NNlib
 using ProgressMeter
 import PrettyTables
@@ -23,11 +21,11 @@ import Zygote
 include("interact.jl")
 
 # Data Utils
-include("data.jl")
-include("data_analysis.jl")
+include("preprocess.jl")
 
 # The DLRM model implementation
 include("model.jl")
-include("train.jl")
+include("train/data.jl")
+include("train/train.jl")
 
 end # module

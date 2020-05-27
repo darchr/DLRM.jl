@@ -116,7 +116,7 @@ end
          0.25169  0.34613  0.21345  0.44208;
     ]'
 
-    Ys = map((e,i) -> e(i), embeddings, sparse_inputs)
+    Ys = map((e,i) -> DLRM.EmbeddingTables.lookup(e, i), embeddings, sparse_inputs)
 
     for i in 1:3
         @test isapprox(Ys[i], output_of_embedding_tables[i])
@@ -127,7 +127,7 @@ end
     #####
 
     # NOTE: We do the triangular slicing in a different order.
-    top_mlp = DLRM.create_mlp([10, 5, 1], [3])
+    top_mlp = DLRM.create_mlp([10, 5, 1], 3)
 
     top_mlp[1].W .= [
         -0.17529 -0.77823  0.21247  0.23766  0.18327 -0.45722 -0.03328  0.22742 -0.19802 -0.28992;
