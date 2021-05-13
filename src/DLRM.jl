@@ -1,31 +1,44 @@
 module DLRM
 
+export DLRMModel, dlrm
+
 # stdlib
-using Distributed   # for preprocessing dataset
-using Mmap
-using SparseArrays
+import Mmap
+import SparseArrays
+import Random
+import Serialization
+import Statistics: mean
 
 # "Internal" dependencies
-using EmbeddingTables
+using OneDNN: OneDNN
 
 # External Dependencies
 import DataStructures
-using Flux
-using NNlib
-using ProgressMeter
-import PrettyTables
-import Zygote
+import ProgressMeter
+import UnPack: @unpack
 
-# Extra Zygote Adjoints for improving the performance
-# of broadcasting.
-include("interact.jl")
+include("utils/threading.jl")
+include("embedding/embedding.jl")
+using ._EmbeddingTables
 
-# Data Utils
-include("preprocess.jl")
+include("model/model.jl")
+using ._Model
 
-# The DLRM model implementation
-include("model.jl")
-include("train/data.jl")
 include("train/train.jl")
+using ._Train
 
+include("data/criteo.jl")
+
+
+#
+# # Data Utils
+# include("preprocess.jl")
+# include("dataset.jl")
+#
+# # The DLRM model implementation
+# include("model.jl")
+# include("loss.jl")
+# include("train/data.jl")
+# include("train/train.jl")
+#
 end # module
