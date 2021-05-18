@@ -141,3 +141,28 @@ function Zygote.accum_param(
     return I
 end
 
+#####
+##### Simple Parallel strategy.
+#####
+
+# This is basically the simplest thing to do.
+# Just use a `Threads.@threads for` to perform the lookups
+#
+# Hardware 2LM will automatically take care of fetching the data ... because that's its job.
+struct SimpleParallelStrategy <: AbstractExecutionStrategy end
+
+function maplookup(
+        ::SimpleParallelStrategy,
+        x::Vector{<:AbstractEmbeddingTable},
+        _I,
+    )
+
+    out = Vector{typeof(example(x[1]))}(undef, length(x))
+    I = collect(_rowwrap(_I))
+    Threads.@threads for i in 1:length(x)
+        out[i] = lookup(x[i], I[i])
+    end
+    return out
+end
+
+

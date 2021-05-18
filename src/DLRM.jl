@@ -3,18 +3,21 @@ module DLRM
 export DLRMModel, dlrm
 
 # stdlib
-import Mmap
-import SparseArrays
-import Random
-import Serialization
+using Mmap: Mmap
+using SparseArrays: SparseArrays
+using Random: Random
+using Serialization: Serialization
 import Statistics: mean
 
 # "Internal" dependencies
 using OneDNN: OneDNN
 
 # External Dependencies
-import DataStructures
-import ProgressMeter
+using DataStructures: DataStructures
+using Flux: Flux
+using HDF5: HDF5
+using NaturalSort: NaturalSort
+using ProgressMeter: ProgressMeter
 import UnPack: @unpack
 
 include("utils/threading.jl")
@@ -28,7 +31,6 @@ include("train/train.jl")
 using ._Train
 
 include("data/criteo.jl")
-
 
 #
 # # Data Utils

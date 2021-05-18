@@ -4,6 +4,8 @@ using Random
 
 # For checking gradients
 using Flux
+using HDF5: HDF5
+using NaturalSort: NaturalSort
 using Zygote
 using OneDNN
 
@@ -24,5 +26,8 @@ include("train/backprop.jl")
 
 # Data Loaders
 include("data/criteo.jl")
+
+# Larger integration tests
+include("integration.jl")
 
 # include("dataset.jl")

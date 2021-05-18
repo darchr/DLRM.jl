@@ -198,7 +198,9 @@ function categorical_values(path::AbstractString, sets = makesets(); save = true
     return sets
 end
 
-function categorical_values(data::Vector{DACRecord}, sets::Vector{<:AbstractSet} = makesets())
+function categorical_values(
+    data::Vector{DACRecord}, sets::Vector{<:AbstractSet} = makesets()
+)
     pmeter = ProgressMeter.Progress(length(data), 1, "Indexing Categorical Features ")
 
     # Parse out records, remap the categorical features.
@@ -274,7 +276,9 @@ end
 ##### Marshaling
 #####
 
-function load!(labels, dense, sparse, vx::AbstractVector{DACRecord}; nthreads = Threads.nthreads())
+function load!(
+    labels, dense, sparse, vx::AbstractVector{DACRecord}; nthreads = Threads.nthreads()
+)
     static_thread(ThreadPool(Base.OneTo(nthreads)), eachindex(labels, vx)) do i
         @inbounds record = vx[i]
         @inbounds labels[i] = record.label
@@ -302,10 +306,10 @@ struct DACLoader{L,D,S}
     batchsize::Int
 end
 
-function DACLoader(dataset, batchsize::Integer)
-    labels = Vector{Float32}(undef, batchsize)
-    dense = Matrix{Float32}(undef, num_continuous_features(DAC()), batchsize)
-    sparse = Matrix{UInt32}(undef, num_categorical_features(DAC()), batchsize)
+function DACLoader(dataset, batchsize::Integer; allocator = default_allocator)
+    labels = allocator(Float32, batchsize)
+    dense = allocator(Float32, num_continuous_features(DAC()), batchsize)
+    sparse = allocator(UInt32, num_categorical_features(DAC()), batchsize)
     return DACLoader(labels, dense, sparse, dataset, batchsize)
 end
 
@@ -316,9 +320,16 @@ function Base.iterate(loader::DACLoader, i = 1)
     start = batchsize * (i - 1) + 1
     stop = batchsize * i
 
-    load!(labels, dense, sparse, view(dataset, start:stop); nthreads = 8)
+    # See increasing performance until about 8 threads.
+    # TODO: Come up with a heuristic for choosing the number of threads based on batchsize.
+    nthreads = min(Threads.nthreads(), 8)
+    load!(labels, dense, sparse, view(dataset, start:stop); nthreads = nthreads)
     return (; labels, dense, sparse), i + 1
 end
+
+Base.length(loader::DACLoader) = div(length(loader.dataset), loader.batchsize)
+Base.parent(loader::DACLoader) = loader.dataset
+batchsize(loader::DACLoader) = loader.batchsize
 
 #####
 ##### Model Builder
@@ -353,6 +364,89 @@ const KAGGLE_EMBEDDING_SIZES = [
     142572,
 ]
 
-function kaggle_dlrm()
-    return dlrm([13, 512, 256, 64], [512, 256, 1], 64, KAGGLE_EMBEDDING_SIZES)
+default_allocator(::Type{T}, dims...) where {T} = Array{T}(undef, dims...)
+function kaggle_dlrm(allocator = default_allocator)
+    return dlrm(
+        [13, 512, 256, 64, 16],
+        [512, 256, 1],
+        16,
+        KAGGLE_EMBEDDING_SIZES;
+        constructor = allocator,
+    )
+end
+
+#####
+##### PyTorch HDF5 loader
+#####
+
+# Load models from an HDF5 File.
+# TODO: Provide options for CachedArrays etc.
+function load_hdf5(path::AbstractString, allocator = default_allocator)
+    return HDF5.h5open(path) do file
+        load_hdf5(file, allocator)
+    end
+end
+
+function load_hdf5(file::HDF5.File, allocator = default_allocator)
+    # Load Embeddings
+    embeddings = load_embeddings(file, allocator)
+    bottom_mlp = load_mlp(file, "bot_", allocator)
+    top_mlp = load_mlp(file, "top_", allocator)
+    return DLRMModel(bottom_mlp, embeddings, _Model.dot_interaction, top_mlp)
+end
+
+function load_embeddings(file::HDF5.File, allocator = default_allocator)
+    names = sort(filter(startswith("emb"), keys(file)); lt = NaturalSort.natural)
+    return map(names) do name
+        _data = read(file, name)
+        @show size(_data)
+        data = allocator(eltype(_data), size(_data))
+        data .= _data
+        return SimpleEmbedding(data)
+    end
+end
+
+function load_mlp(
+    file::HDF5.File, prefix_filter::AbstractString, allocator = default_allocator
+)
+    names = sort(filter(startswith(prefix_filter), keys(file)); lt = NaturalSort.natural)
+    # Names for layers are structured like this:
+    # "bot_l.0.bias"
+    # "bot_l.0.weight"
+    # "bot_l.2.bias"
+    # "bot_l.2.weight"
+    # ...
+    #
+    # The strategy here is to grab the prefix before the period, find the unique prefixes,
+    # the go through them in order to build the layers.
+    prefixes = unique(first.(splitext.(names)))
+    layers = []
+    for prefix in prefixes
+        weight = read(file["$prefix.weight"])
+        bias = read(file["$prefix.bias"])
+        @show size(weight)
+
+        # N.B. Make second to last dense layer use a sigmoid to match the Facebook Pytorch
+        # code.
+        if prefix != prefixes[end] || prefix_filter == "bot_"
+            println("Adding Relu")
+            layer = OneDNN.Dense(weight, bias, Flux.relu)
+        else
+            println("Adding Sigmoid")
+            layer = OneDNN.Dense(weight, bias, Flux.sigmoid)
+        end
+        push!(layers, layer)
+    end
+    return Flux.Chain(layers...)
+end
+
+function load_inputs(file::HDF5.File)
+    labels = vec(read(file["labels"]))
+    dense = read(file["input_bot"])
+    prefixes = sort(filter(startswith("input_emb"), keys(file)), lt = NaturalSort.natural)
+    sparse = read.(getindex.(Ref(file), prefixes))
+    for _a in sparse
+        _a .+= 1
+    end
+    return (; labels, dense, sparse)
 end

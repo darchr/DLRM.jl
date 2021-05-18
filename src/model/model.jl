@@ -124,8 +124,8 @@ end
 
 function (D::DLRMModel)(
     dense,
-    sparse,
-    strategy = _EmbeddingTables.DefaultExecutionStrategy();
+    sparse;
+    strategy = _EmbeddingTables.DefaultExecutionStrategy(),
     # Arbitrary callback.
     # Symbol will be passed describing action.
     cb = donothing,
