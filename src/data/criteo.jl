@@ -290,9 +290,12 @@ function load!(
             @inbounds(dense[j, i] = continuous[j])
         end
 
+        # Locality for loading categorical features is not the best.
+        # However, threading should be coarse grained enough to hopefully avoid false
+        # sharing.
         categorical = record.categorical
         for j in Base.OneTo(num_categorical_features(DAC()))
-            @inbounds(sparse[j, i] = categorical[j])
+            @inbounds(sparse[i, j] = categorical[j])
         end
     end
     return nothing
@@ -309,7 +312,8 @@ end
 function DACLoader(dataset, batchsize::Integer; allocator = default_allocator)
     labels = allocator(Float32, batchsize)
     dense = allocator(Float32, num_continuous_features(DAC()), batchsize)
-    sparse = allocator(UInt32, num_categorical_features(DAC()), batchsize)
+    # Put batch along the continuous dimension for better lookup locality.
+    sparse = allocator(UInt32, batchsize, num_categorical_features(DAC()))
     return DACLoader(labels, dense, sparse, dataset, batchsize)
 end
 
@@ -367,12 +371,19 @@ const KAGGLE_EMBEDDING_SIZES = [
 default_allocator(::Type{T}, dims...) where {T} = Array{T}(undef, dims...)
 function kaggle_dlrm(allocator = default_allocator)
     return dlrm(
-        [13, 512, 256, 64, 16],
+        [13, 512, 256, 128],
         [512, 256, 1],
-        16,
+        128,
         KAGGLE_EMBEDDING_SIZES;
         constructor = allocator,
     )
+    # return dlrm(
+    #     [13, 512, 256, 64, 16],
+    #     [512, 256, 1],
+    #     16,
+    #     KAGGLE_EMBEDDING_SIZES;
+    #     constructor = allocator,
+    # )
 end
 
 #####
@@ -443,6 +454,9 @@ end
 function load_inputs(file::HDF5.File)
     labels = vec(read(file["labels"]))
     dense = read(file["input_bot"])
+
+    # The sparse inputs are stored as individual vectors.
+    # Concatenate them together into a single 2D matrix.
     prefixes = sort(filter(startswith("input_emb"), keys(file)), lt = NaturalSort.natural)
     sparse = read.(getindex.(Ref(file), prefixes))
     for _a in sparse

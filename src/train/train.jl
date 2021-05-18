@@ -41,14 +41,15 @@ function ChainRulesCore.rrule(::typeof(bce_loss), ŷ, y)
     return z, bce_pullback
 end
 
-struct LossWrapper{F}
+struct LossWrapper{F,NT}
     f::F
+    kw::NT
 end
 
-wrap_loss(loss_fn) = LossWrapper(loss_fn)
+wrap_loss(loss_fn; kw...) = LossWrapper(loss_fn, (;kw...,))
 
-function (wrapper::LossWrapper)(model, labels, args...; kw...)
-    loss = wrapper.f(model(args...; kw...), labels)
+function (wrapper::LossWrapper)(model, labels, args...)
+    loss = wrapper.f(model(args...; wrapper.kw...), labels)
     # Zygote.ignore() do
     #     @show loss
     # end
@@ -144,10 +145,12 @@ function train!(loss, model, data, opt; cb = () -> ())
     cb = runall(cb)
 
     ProgressMeter.@showprogress 1 for d in data
-        _grads = Zygote.gradient(loss, model, d...)
-        gather!(grads, _grads[1])
-        custom_update!(opt, params, grads)
-        cb()
+        @time begin
+            _grads = Zygote.gradient(loss, model, d...)
+            gather!(grads, _grads[1])
+            custom_update!(opt, params, grads)
+            cb()
+        end
     end
 end
 

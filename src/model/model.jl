@@ -1,6 +1,7 @@
 module _Model
 
 using .._EmbeddingTables
+using .._Utils
 
 export DLRMModel, dlrm
 

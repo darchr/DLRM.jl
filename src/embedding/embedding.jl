@@ -1,6 +1,9 @@
 module _EmbeddingTables
 
 export SimpleEmbedding, lookup, maplookup, SparseEmbeddingUpdate, SimpleParallelStrategy
+export ConcatLookup
+
+using .._Utils
 
 # For defining sparse adjoints.
 import ChainRulesCore

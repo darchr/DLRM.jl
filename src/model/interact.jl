@@ -31,20 +31,49 @@ function ChainRulesCore.rrule(
     ysizes = size.(ys, 1)
     out = fast_vcat(x, ys)
 
-    back = function fast_vcat_pullback(Δ)
+    function fast_vcat_pullback(Δ)
         Δmaterialized = OneDNN.materialize(Δ; allowreorder = false)
 
         # view into 'X'
         δX = view(Δmaterialized, 1:xsize, :)
 
         # use OneDNN.Slicer to help with type inference.
-        f = OneDNN.Slicer(xsize + 1, 1, Δmaterialized)
+        f = Slicer(xsize + 1, 1, Δmaterialized)
         δYs = map(f, ysizes)
 
         return (ChainRulesCore.NO_FIELDS, δX, δYs)
     end
 
-    return out, back
+    return out, fast_vcat_pullback
+end
+
+# Deal with the `PreallocationStrategy`.
+function fast_vcat(X, ys::ConcatLookup)
+    x = OneDNN.materialize(X)
+
+    # Sanity check that the proper amount of space was reserved.
+    @assert size(x, 1) == ys.offset
+    vy = view(ys.data, 1:ys.offset, :)
+    Threads.@threads for i in eachindex(x, vy)
+        @inbounds(vy[i] = x[i])
+    end
+    return ys.data
+end
+
+function ChainRulesCore.rrule(
+    ::typeof(fast_vcat), x::AbstractMatrix, ys::ConcatLookup
+)
+    xsize = size(x, 1)
+    ysize = size(y, 1)
+
+    out = fast_vcat(x, ys)
+    function fast_vcat_pullback(Δ)
+        Δmaterialized = OneDNN.materialize(Δ; allowreorder = false)
+        Δx = view(Δmaterialized, 1:xsize, :)
+        Δys = view(Δmaterialized, (xsize + 1):ysize, :)
+        return (ChainRulesCore.NO_FIELDS, Δx, Δys)
+    end
+    return out, fast_vcat_pullback
 end
 
 ### Self Interaction

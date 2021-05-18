@@ -108,11 +108,11 @@ end
             println("Testing Bottom MLP layer: $i")
             ref = bottom_mlp_grads_ref[i]
             @test isa(ref, NamedTuple)
-            @test propertynames(ref) == (:weight, :bias, :σ)
+            @test issubset((:weight, :bias, :σ), propertynames(ref))
 
             opt = bottom_mlp_grads_opt[i]
             @test isa(opt, NamedTuple)
-            @test propertynames(opt) == (:weights, :bias)
+            @test issubset((:weights, :bias), propertynames(opt))
             @test isa(opt.weights, OneDNN.Memory)
             @test isa(opt.bias, OneDNN.Memory)
 
@@ -131,11 +131,11 @@ end
             println("Testing Top MLP layer: $i")
             ref = top_mlp_grads_ref[i]
             @test isa(ref, NamedTuple)
-            @test propertynames(ref) == (:weight, :bias, :σ)
+            @test issubset((:weight, :bias, :σ), propertynames(ref))
 
             opt = top_mlp_grads_opt[i]
             @test isa(opt, NamedTuple)
-            @test propertynames(opt) == (:weights, :bias)
+            @test issubset((:weights, :bias), propertynames(opt))
             @test isa(opt.weights, OneDNN.Memory)
             @test isa(opt.bias, OneDNN.Memory)
 

@@ -20,7 +20,9 @@ using NaturalSort: NaturalSort
 using ProgressMeter: ProgressMeter
 import UnPack: @unpack
 
-include("utils/threading.jl")
+include("utils/utils.jl")
+using ._Utils
+
 include("embedding/embedding.jl")
 using ._EmbeddingTables
 

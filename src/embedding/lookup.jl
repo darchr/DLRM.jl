@@ -22,7 +22,6 @@ end
 function uncompress(
     x::SparseEmbeddingUpdate{<:Any,<:AbstractVector}, ncols = maximum(x.indices)
 )
-
     O = similar(x.delta, size(x.delta, 1), ncols)
     O .= zero(eltype(O))
     for (column, update) in zip(x.indices, eachcol(x.delta))
@@ -35,7 +34,6 @@ end
 function uncompress(
     x::SparseEmbeddingUpdate{<:Any,<:AbstractMatrix}, ncols = maximum(x.indices)
 )
-
     O = similar(x.delta, size(x.delta, 1), ncols)
     O .= zero(eltype(O))
     for (column, update) in zip(eachcol(x.indices), eachcol(x.delta))
@@ -81,11 +79,7 @@ function lookup(A::AbstractEmbeddingTable{T}, II::MI) where {F,T}
     return O
 end
 
-#-- Adjoints
-# Zygote.@adjoint function lookup(A::AbstractEmbeddingTable, I)
-#     return lookup(A, I), Δ -> (SparseEmbeddingUpdate(Δ, I), nothing)
-# end
-
+#-- Pullbacks
 function ChainRulesCore.rrule(::typeof(lookup), A::AbstractEmbeddingTable, I)
     function lookup_pullback(Δ)
         return (
@@ -104,11 +98,11 @@ end
 const VecAET = Vector{<:AbstractEmbeddingTable}
 
 # Dispatch plumbing for-the-win.
-_rowwrap(I::AbstractVector{<:AbstractVector}) = I
-_rowwrap(I::AbstractMatrix) = eachrow(I)
+_colwrap(I::AbstractVector{<:AbstractVector}) = I
+_colwrap(I::AbstractMatrix) = eachcol(I)
 maplookup(x::VecAET, i...) = maplookup(DefaultExecutionStrategy(), x, i...)
 function maplookup(strategy::DefaultExecutionStrategy, x::VecAET, I)
-    return map(lookup, x, _rowwrap(I))
+    return map(lookup, x, _colwrap(I))
 end
 
 # Generate the same pullback regardless of execution strategy.
@@ -122,7 +116,7 @@ function ChainRulesCore.rrule(
         return (
             ChainRulesCore.NO_FIELDS,
             ChainRulesCore.NO_FIELDS,
-            ChainRulesCore.@thunk(map(SparseEmbeddingUpdate, Δs, _rowwrap(I))),
+            ChainRulesCore.@thunk(map(SparseEmbeddingUpdate, Δs, _colwrap(I))),
             ChainRulesCore.DoesNotExist(),
         )
     end
@@ -132,6 +126,8 @@ end
 
 # Note - this is probably a hack that violates some part of Zygote's API - but it's
 # kind of the only way I've been able to get this to work reliably.
+#
+# TODO: Ditch?
 function Zygote.accum_param(
     cx::Zygote.Context, v::Vector{<:AbstractEmbeddingTable}, I::AbstractVector
 )
@@ -145,24 +141,80 @@ end
 ##### Simple Parallel strategy.
 #####
 
-# This is basically the simplest thing to do.
-# Just use a `Threads.@threads for` to perform the lookups
-#
-# Hardware 2LM will automatically take care of fetching the data ... because that's its job.
 struct SimpleParallelStrategy <: AbstractExecutionStrategy end
-
-function maplookup(
-        ::SimpleParallelStrategy,
-        x::Vector{<:AbstractEmbeddingTable},
-        _I,
-    )
-
+function maplookup(::SimpleParallelStrategy, x::Vector{<:AbstractEmbeddingTable}, _I)
     out = Vector{typeof(example(x[1]))}(undef, length(x))
-    I = collect(_rowwrap(_I))
-    Threads.@threads for i in 1:length(x)
+    I = collect(_colwrap(_I))
+    Threads.@threads for i in eachindex(x, I)
         out[i] = lookup(x[i], I[i])
     end
     return out
 end
 
+#####
+##### Preallocate destinations
+#####
 
+struct PreallocationStrategy <: AbstractExecutionStrategy
+    # Allow for extra rows to be placed at the beginning of the destination to allow
+    # the results of dense computation to be inserted inplace.
+    prependrows::Int
+end
+PreallocationStrategy() = PreallocationStrategy(0)
+
+struct ConcatLookup{T}
+    data::T
+    offset::Int
+    rows::Vector{Int}
+end
+
+_batchsize(x::AbstractVector) = length(first(x))
+_batchsize(x::AbstractMatrix) = size(x, 1)
+
+function maplookup(
+    strategy::PreallocationStrategy, x::Vector{<:AbstractEmbeddingTable{T}}, _I
+) where {T}
+    # Preallocate destination.
+    I = collect(_colwrap(_I))
+    rows = featuresize.(x)
+    offset = strategy.prependrows
+    data = similar(example(x[1]), strategy.prependrows + sum(rows), _batchsize(_I))
+
+    # For deciding where to index
+    rows_sum = cumsum(rows)
+    pushfirst!(rows_sum, 0)
+
+    Threads.@threads for i in eachindex(x, I)
+        start = 1 + offset + rows_sum[i]
+        stop = offset + rows_sum[i + 1]
+        # Create destination view
+        O = view(data, start:stop, :)
+        A = x[i]
+        lookup!(O, A, I[i], lookuptype(A))
+        @show start:stop
+    end
+    return ConcatLookup(data, offset, rows)
+end
+
+# Need to slightly modify the "rrule" since it's likely that the resulting sensitivity
+# will be a single matrix rather than a vector of matrices.
+function ChainRulesCore.rrule(
+    ::typeof(maplookup),
+    strategy::PreallocationStrategy,
+    A::Vector{<:AbstractEmbeddingTable},
+    I,
+)
+    lookup = maplookup(strategy, A, I)
+    function maplookup_pullback(Δ)
+        f = Slicer(lookup.offset + 1, 1, Δ)
+        δs = map(f, lookup.rows)
+
+        return (
+            ChainRulesCore.NO_FIELDS,
+            ChainRulesCore.NO_FIELDS,
+            δs,
+            ChainRulesCore.DoesNotExist(),
+        )
+    end
+    return lookup, maplookup_pullback
+end
