@@ -48,30 +48,29 @@ function ChainRulesCore.rrule(
 end
 
 # Deal with the `PreallocationStrategy`.
-function fast_vcat(X, ys::ConcatLookup)
+function fast_vcat(X, ys::AbstractMatrix)
     x = OneDNN.materialize(X)
 
     # Sanity check that the proper amount of space was reserved.
-    @assert size(x, 1) == ys.offset
-    vy = view(ys.data, 1:ys.offset, :)
-    Threads.@threads for i in eachindex(x, vy)
+    vy = view(ys, 1:size(x, 1), :)
+    #Threads.@threads for i in eachindex(x, vy)
+     for i in eachindex(x, vy)
         @inbounds(vy[i] = x[i])
     end
-    return ys.data
+    return ys
 end
 
 function ChainRulesCore.rrule(
-    ::typeof(fast_vcat), x::AbstractMatrix, ys::ConcatLookup
+    ::typeof(fast_vcat), x::AbstractMatrix, ys::AbstractMatrix
 )
     xsize = size(x, 1)
-    ysize = size(y, 1)
+    ysize = size(ys, 1)
 
     out = fast_vcat(x, ys)
     function fast_vcat_pullback(Δ)
         Δmaterialized = OneDNN.materialize(Δ; allowreorder = false)
         Δx = view(Δmaterialized, 1:xsize, :)
-        Δys = view(Δmaterialized, (xsize + 1):ysize, :)
-        return (ChainRulesCore.NO_FIELDS, Δx, Δys)
+        return (ChainRulesCore.NO_FIELDS, Δx, Δ)
     end
     return out, fast_vcat_pullback
 end
@@ -109,14 +108,12 @@ function ChainRulesCore.rrule(::typeof(self_batched_mul), x)
         out = OneDNN.matmul(X, batched_transpose(Δ))
 
         # Accumulate the results of the second multiplication into `partial` using post-ops
-        # po = OneDNN.PostOps()
-        # OneDNN.appendsum!(po)
-
-        # attr = OneDNN.Attributes()
-        # append!(attr, po)
-        # TODO: Inplace variation
-        temp = OneDNN.matmul(X, Δ)
-        return (ChainRulesCore.NO_FIELDS, OneDNN.materialize(out + temp))
+        postops = OneDNN.PostOps()
+        OneDNN.appendsum!(postops)
+        attributes = OneDNN.Attributes()
+        append!(attributes, postops)
+        OneDNN.matmul!(out, X, Δ; attributes = attributes)
+        return (ChainRulesCore.NO_FIELDS, OneDNN.materialize(out))
     end
 
     return y, back

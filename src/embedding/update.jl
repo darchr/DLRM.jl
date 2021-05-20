@@ -55,7 +55,8 @@ function Flux.Optimise.update!(opt, x, xbar::SparseEmbeddingUpdate)
 end
 
 function Flux.Optimise.apply!(opt::Flux.Descent, x, xbar::SparseEmbeddingUpdate)
-    xbar.delta .*= opt.eta
+    eta = convert(eltype(xbar.delta), opt.eta)
+    xbar.delta .*= eta
     return xbar
 end
 

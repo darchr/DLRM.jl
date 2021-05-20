@@ -10,6 +10,7 @@ using Serialization: Serialization
 import Statistics: mean
 
 # "Internal" dependencies
+using CachedArrays: CachedArrays
 using OneDNN: OneDNN
 
 # External Dependencies
@@ -33,6 +34,21 @@ include("train/train.jl")
 using ._Train
 
 include("data/criteo.jl")
+
+#####
+##### Keep these definitions here for now until we find a better home.
+#####
+
+struct ToCached{T,M}
+    manager::M
+end
+
+tocached(m::CachedArrays.CacheManager) = tocached(Float32, m)
+tocached(::Type{T}, m::M) where {T,M} = ToCached{T,M}(m)
+
+OneDNN.ancestor(x::CachedArrays.CachedArray) = x
+(f::ToCached{T})(x...) where {T} = CachedArrays.CachedArray{T}(undef, f.manager, x)
+(f::ToCached)(::Type{T}, x...) where {T} = CachedArrays.CachedArray{T}(undef, f.manager, x)
 
 #
 # # Data Utils

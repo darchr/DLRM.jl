@@ -26,112 +26,124 @@
     @test isapprox(loss_ref, loss)
 
     # More agressive
-    loss_fn = DLRM._Train.wrap_loss(DLRM._Train.bce_loss)
-    @test isapprox(loss_ref, loss_fn(model, labels, dense, sparse))
+    strategies = [
+        DLRM.DefaultStrategy(),
+        DLRM.SimpleParallelStrategy(),
+        DLRM.PreallocationStrategy(size(last(model.bottom_mlp).weights, 2))
+    ]
 
-    #####
-    ##### Gradients!
-    #####
+    for strategy in strategies
+        @show strategy
 
-    learning_rate = 10.0
-    opt = Flux.Descent(learning_rate)
+        # Need to reload the model every time to start with the same beginning weights.
+        model = DLRM.load_hdf5(io)
+        loss_fn = DLRM._Train.wrap_loss(DLRM._Train.bce_loss; strategy = strategy)
+        @test isapprox(loss_ref, loss_fn(model, labels, dense, sparse))
 
-    params = DLRM._Train.DLRMParams(model)
-    grads = DLRM._Train.DLRMGrads(model)
-    _grads = Zygote.gradient(loss_fn, model, labels, dense, sparse)
-    DLRM._Train.gather!(grads, _grads[1])
-    DLRM._Train.custom_update!(opt, params, grads)
+        #####
+        ##### Gradients!
+        #####
 
-    # Top MLP
-    start = length(model.bottom_mlp) + 1
-    let
-        update_names = sort(
-            filter(startswith("update_top"), keys(io)); lt = NaturalSort.natural
-        )
-        update_prefixes = unique(first.(splitext.(update_names)))
+        learning_rate = 10.0
+        opt = Flux.Descent(learning_rate)
 
-        original_names = sort(
-            filter(startswith("top_l"), keys(io)); lt = NaturalSort.natural
-        )
-        original_prefixes = unique(first.(splitext.(original_names)))
+        params = DLRM._Train.DLRMParams(model)
+        grads = DLRM._Train.DLRMGrads(model)
+        _grads = Zygote.gradient(loss_fn, model, labels, dense, sparse)
+        DLRM._Train.gather!(grads, _grads[1])
+        DLRM._Train.custom_update!(opt, params, grads)
 
-        iter = eachindex(original_prefixes, update_prefixes, grads.weights[start:end])
+        # Top MLP
+        start = length(model.bottom_mlp) + 1
+        let
+            update_names = sort(
+                filter(startswith("update_top"), keys(io)); lt = NaturalSort.natural
+            )
+            update_prefixes = unique(first.(splitext.(update_names)))
 
-        for i in iter
-            # Weights
-            original = read(io["$(original_prefixes[i]).weight"])
-            update = read(io["$(update_prefixes[i]).weight"])
-            pytorch_grad = original .- update
+            original_names = sort(
+                filter(startswith("top_l"), keys(io)); lt = NaturalSort.natural
+            )
+            original_prefixes = unique(first.(splitext.(original_names)))
 
-            jl_grad = learning_rate .* OneDNN.materialize(grads.weights[start + i - 1])
-            @test !isapprox(original, update)
-            @test isapprox(jl_grad, pytorch_grad)
-            @test isapprox(update, OneDNN.materialize(model.top_mlp[i].weights))
+            iter = eachindex(original_prefixes, update_prefixes, grads.weights[start:end])
 
-            # Bias
-            original = read(io["$(original_prefixes[i]).bias"])
-            update = read(io["$(update_prefixes[i]).bias"])
-            pytorch_grad = original .- update
+            for i in iter
+                # Weights
+                original = read(io["$(original_prefixes[i]).weight"])
+                update = read(io["$(update_prefixes[i]).weight"])
+                pytorch_grad = original .- update
 
-            jl_grad = learning_rate .* OneDNN.materialize(grads.bias[start + i - 1])
-            @test !isapprox(original, update)
-            @test isapprox(jl_grad, pytorch_grad)
-            @test isapprox(update, OneDNN.materialize(model.top_mlp[i].bias))
+                jl_grad = learning_rate .* OneDNN.materialize(grads.weights[start + i - 1])
+                @test !isapprox(original, update)
+                @test isapprox(jl_grad, pytorch_grad)
+                @test isapprox(update, OneDNN.materialize(model.top_mlp[i].weights))
+
+                # Bias
+                original = read(io["$(original_prefixes[i]).bias"])
+                update = read(io["$(update_prefixes[i]).bias"])
+                pytorch_grad = original .- update
+
+                jl_grad = learning_rate .* OneDNN.materialize(grads.bias[start + i - 1])
+                @test !isapprox(original, update)
+                @test isapprox(jl_grad, pytorch_grad)
+                @test isapprox(update, OneDNN.materialize(model.top_mlp[i].bias))
+            end
         end
-    end
 
-    # Bottom MLP
-    let
-        update_names = sort(
-            filter(startswith("update_bot"), keys(io)); lt = NaturalSort.natural
-        )
-        update_prefixes = unique(first.(splitext.(update_names)))
+        # Bottom MLP
+        let
+            update_names = sort(
+                filter(startswith("update_bot"), keys(io)); lt = NaturalSort.natural
+            )
+            update_prefixes = unique(first.(splitext.(update_names)))
 
-        original_names = sort(
-            filter(startswith("bot_l"), keys(io)); lt = NaturalSort.natural
-        )
-        original_prefixes = unique(first.(splitext.(original_names)))
+            original_names = sort(
+                filter(startswith("bot_l"), keys(io)); lt = NaturalSort.natural
+            )
+            original_prefixes = unique(first.(splitext.(original_names)))
 
-        iter = eachindex(original_prefixes, update_prefixes, grads.weights[1:(start - 1)])
+            iter = eachindex(original_prefixes, update_prefixes, grads.weights[1:(start - 1)])
 
-        for i in iter
-            # Weights
-            original = read(io["$(original_prefixes[i]).weight"])
-            update = read(io["$(update_prefixes[i]).weight"])
-            pytorch_grad = original .- update
+            for i in iter
+                # Weights
+                original = read(io["$(original_prefixes[i]).weight"])
+                update = read(io["$(update_prefixes[i]).weight"])
+                pytorch_grad = original .- update
 
-            jl_grad = learning_rate .* OneDNN.materialize(grads.weights[i])
-            @test !isapprox(original, update)
-            @test isapprox(jl_grad, pytorch_grad)
-            @test isapprox(update, OneDNN.materialize(model.bottom_mlp[i].weights))
+                jl_grad = learning_rate .* OneDNN.materialize(grads.weights[i])
+                @test !isapprox(original, update)
+                @test isapprox(jl_grad, pytorch_grad)
+                @test isapprox(update, OneDNN.materialize(model.bottom_mlp[i].weights))
 
-            # Bias
-            original = read(io["$(original_prefixes[i]).bias"])
-            update = read(io["$(update_prefixes[i]).bias"])
-            pytorch_grad = original .- update
+                # Bias
+                original = read(io["$(original_prefixes[i]).bias"])
+                update = read(io["$(update_prefixes[i]).bias"])
+                pytorch_grad = original .- update
 
-            jl_grad = learning_rate .* OneDNN.materialize(grads.bias[i])
-            @test !isapprox(original, update)
-            @test isapprox(jl_grad, pytorch_grad)
-            @test isapprox(update, OneDNN.materialize(model.bottom_mlp[i].bias))
+                jl_grad = learning_rate .* OneDNN.materialize(grads.bias[i])
+                @test !isapprox(original, update)
+                @test isapprox(jl_grad, pytorch_grad)
+                @test isapprox(update, OneDNN.materialize(model.bottom_mlp[i].bias))
+            end
         end
-    end
 
-    # Embedding Tables
-    let
-        update_names = sort(
-            filter(startswith("update_emb"), keys(io)); lt = NaturalSort.natural
-        )
+        # Embedding Tables
+        let
+            update_names = sort(
+                filter(startswith("update_emb"), keys(io)); lt = NaturalSort.natural
+            )
 
-        original_names = sort(
-            filter(startswith("emb_"), keys(io)); lt = NaturalSort.natural
-        )
+            original_names = sort(
+                filter(startswith("emb_"), keys(io)); lt = NaturalSort.natural
+            )
 
-        for i in eachindex(original_names, update_names, model.embeddings)
-            original = read(io[original_names[i]])
-            reference = read(io[update_names[i]])
-            @test isapprox(reference, model.embeddings[i])
-            @test !isapprox(original, reference)
+            for i in eachindex(original_names, update_names, model.embeddings)
+                original = read(io[original_names[i]])
+                reference = read(io[update_names[i]])
+                @test isapprox(reference, model.embeddings[i])
+                @test !isapprox(original, reference)
+            end
         end
     end
 end

@@ -4,32 +4,20 @@ const VECTOR_WIDTH_BYTES = 64
 
 # Lookup - nonreducing
 @generated function lookup!(
-        O,
-        A::AbstractEmbeddingTable{T},
-        I::AbstractVector{<:Integer},
-        ::Static{N},
-    ) where {T,N}
+    O, A::AbstractEmbeddingTable{T}, I::AbstractVector{<:Integer}, ::Static{N}
+) where {T,N}
 
-    emit_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
+    return emit_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
 end
 
 # Lookup - reduction
 @generated function lookup!(
-        O,
-        A::AbstractEmbeddingTable{T},
-        II::AbstractMatrix{<:Integer},
-        ::Static{N}
-    ) where {T,N}
-
+    O, A::AbstractEmbeddingTable{T}, II::AbstractMatrix{<:Integer}, ::Static{N}
+) where {T,N}
     return emit_reducing_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
 end
 
-@generated function __update!(
-        x::AbstractEmbeddingTable{T},
-        xbar,
-        ::Static{N}
-    ) where {T,N}
-
+@generated function __update!(x::AbstractEmbeddingTable{T}, xbar, ::Static{N}) where {T,N}
     return emit_update(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
 end
 
@@ -70,17 +58,17 @@ function sfence()
     return Base.llvmcall(str, Nothing, Tuple{})
 end
 
-function lookup_loop(::Type{T}, unroll) where {T <: SIMD.Vec}
-    syms = [Symbol("i_$j") for j in 0:unroll]
-    load_exprs = map(0:unroll-1) do j
-        x = syms[j+1]
+function lookup_loop(::Type{T}, unroll) where {T<:SIMD.Vec}
+    syms = [Symbol("i_$j") for j = 0:unroll]
+    load_exprs = map(0:(unroll - 1)) do j
+        x = syms[j + 1]
         offset = sizeof(T) * j
         :($x = vload($T, ptrA + macro_offset + $offset))
     end
 
     # Use non-remporal stores
-    store_exprs = map(0:unroll-1) do j
-        x = syms[j+1]
+    store_exprs = map(0:(unroll - 1)) do j
+        x = syms[j + 1]
         offset = sizeof(T) * j
         :(vstore($x, ptrO + macro_offset + $offset, nothing, Val{true}(), Val{true}()))
     end
@@ -109,7 +97,7 @@ function emit_reducing_lookup(::Type{T}, vecwidth::Integer, numelements) where {
     inner = unroll(f, sizeof(T) * numelements, maxunroll)
 
     return quote
-        for col in 1:size(II,2)
+        for col = 1:size(II, 2)
             # Get the column pointer
             ptrO = columnpointer(O, col)
 
@@ -119,23 +107,23 @@ function emit_reducing_lookup(::Type{T}, vecwidth::Integer, numelements) where {
     end
 end
 
-function reducing_lookup_loop(::Type{T}, unroll) where {T <: SIMD.Vec}
-    syms = [Symbol("i_$j") for j in 0:unroll]
-    zero_exprs = map(0:unroll-1) do j
-        x = syms[j+1]
+function reducing_lookup_loop(::Type{T}, unroll) where {T<:SIMD.Vec}
+    syms = [Symbol("i_$j") for j = 0:unroll]
+    zero_exprs = map(0:(unroll - 1)) do j
+        x = syms[j + 1]
         offset = sizeof(T) * j
         :($x = zero($T))
     end
 
     # First, unroll the innermost level
-    inner_exprs = map(0:unroll-1) do j
-        x = syms[j+1]
+    inner_exprs = map(0:(unroll - 1)) do j
+        x = syms[j + 1]
         offset = sizeof(T) * j
         return :($x += vload($T, ptrA + macro_offset + $offset))
     end
 
-    store_exprs = map(0:unroll-1) do j
-        x = syms[j+1]
+    store_exprs = map(0:(unroll - 1)) do j
+        x = syms[j + 1]
         offset = sizeof(T) * j
         return :(vstore($x, ptrO + macro_offset + $offset))
     end
@@ -143,8 +131,8 @@ function reducing_lookup_loop(::Type{T}, unroll) where {T <: SIMD.Vec}
     # Then, emit the loop
     return quote
         $(zero_exprs...)
-        for row in 1:size(II,1)
-            @inbounds slice = II[row,col]
+        for row = 1:size(II, 1)
+            @inbounds slice = II[row, col]
             @inbounds ptrA = columnpointer(A, slice)
             $(inner_exprs...)
         end
@@ -168,7 +156,7 @@ function emit_update(::Type{T}, vecwidth::Integer, numelements) where {T}
     inner = unroll(f, sizeof(T) * numelements, maxunroll)
 
     return quote
-        for col in 1:size(xbar.indices, 2)
+        for col = 1:size(xbar.indices, 2)
             # Load the set of values to update
             src_ptr = columnpointer(xbar.delta, col)
             $(inner...)
@@ -176,42 +164,42 @@ function emit_update(::Type{T}, vecwidth::Integer, numelements) where {T}
     end
 end
 
-function update_loop(::Type{T}, unroll) where {T <: SIMD.Vec}
-    syms_preload = [Symbol("i_$j") for j in 0:unroll]
-    syms_load = [Symbol("j_$j") for j in 0:unroll]
+function update_loop(::Type{T}, unroll) where {T<:SIMD.Vec}
+    syms_preload = [Symbol("i_$j") for j = 0:unroll]
+    syms_load = [Symbol("j_$j") for j = 0:unroll]
 
     # Step 1: Preload the update values into registers
     # TODO: Apply learning parameter here?
-    preload_exprs = map(0:unroll-1) do j
-        x = syms_preload[j+1]
+    preload_exprs = map(0:(unroll - 1)) do j
+        x = syms_preload[j + 1]
         unroll_offset = sizeof(T) * j
         :($x = vload($T, src_ptr + macro_offset + $unroll_offset))
     end
 
     # Step 2: Fetch the value we are going to update
-    load_exprs = map(0:unroll-1) do j
-        x = syms_load[j+1]
+    load_exprs = map(0:(unroll - 1)) do j
+        x = syms_load[j + 1]
         unroll_offset = sizeof(T) * j
         :($x = vload($T, dst_ptr + macro_offset + $unroll_offset))
     end
 
     # Step 3: Add the values together
-    sub_exprs = map(0:unroll-1) do j
-        x = syms_preload[j+1]
-        y = syms_load[j+1]
+    sub_exprs = map(0:(unroll - 1)) do j
+        x = syms_preload[j + 1]
+        y = syms_load[j + 1]
         :($y -= $x)
     end
 
     # Step 4: Store the results back
-    store_exprs = map(0:unroll-1) do j
-        x = syms_load[j+1]
+    store_exprs = map(0:(unroll - 1)) do j
+        x = syms_load[j + 1]
         unroll_offset = sizeof(T) * j
         :(vstore($x, dst_ptr + macro_offset + $unroll_offset))
     end
 
     return quote
         $(preload_exprs...)
-        for row in 1:size(xbar.indices, 1)
+        for row = 1:size(xbar.indices, 1)
             column_index = @inbounds(xbar.indices[row, col])
             dst_ptr = columnpointer(x, column_index)
             $(load_exprs...)
@@ -294,7 +282,7 @@ adjust(::Integer, ::Integer) = nothing
 function emitloop(x::Integer, y::Integer, ex)
     trip_count = div(x, y)
     return quote
-        for _ in 1:$(trip_count)
+        for _ = 1:($(trip_count))
             $ex
         end
     end

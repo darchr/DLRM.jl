@@ -10,6 +10,9 @@ import Flux
 import NNlib
 import OneDNN
 import ProgressMeter
+import Zygote
+
+const TIMES = UInt[]
 
 include("interact.jl")
 
@@ -126,7 +129,7 @@ end
 function (D::DLRMModel)(
     dense,
     sparse;
-    strategy = _EmbeddingTables.DefaultExecutionStrategy(),
+    strategy = DefaultStrategy(),
     # Arbitrary callback.
     # Symbol will be passed describing action.
     cb = donothing,
@@ -157,7 +160,6 @@ function dlrm(
     constructor = (x...) -> Array{Float32}(undef, x...),
     weight_init_kernel = GlorotNormal(),
 )
-
     # Use the passed kernels to construct the actual functions that will initialize the
     # weights of the model
     weight_init = function (x...)

@@ -2,24 +2,20 @@
 # correctly register the gradients.
 #
 # This test checks both that this case still fails and tests my workaround.
-create_ensemble(dims; kw...) = create_ensemble((x...) -> map(DLRM._EmbeddingTables.lookup, x...), dims; kw...)
-function create_ensemble(f, dims; kw...)
-    params = map(dims) do dim
-        return DLRM._EmbeddingTables.SimpleEmbedding(rand(Float32, dim))
-    end
-
-    return (I, y) -> Flux.mse(vcat(f(params, I)...), y), Flux.Params(params)
+function create_ensemble(dims)
+    return [DLRM._EmbeddingTables.SimpleEmbedding(rand(Float32, dim)) for dim in dims]
 end
+
+_normalize(x::AbstractVector) = reduce(vcat, x)
+_normalize(x) = x
+
+loss_wrap(f) = (y, x...) -> Flux.mse(_normalize(f(x...)), y)
 
 @testset "Testing Map" begin
     EmbeddingTables = DLRM._EmbeddingTables
 
     # Create three lookup tables
-    dims = [
-        (5, 5),
-        (5, 10),
-        (5, 15),
-    ]
+    dims = [(5, 5), (5, 10), (5, 15)]
 
     # Create input indices and the "expected" result.
     batchsize = 5
@@ -27,51 +23,53 @@ end
     y = rand(Float32, sum(first.(dims)), batchsize)
 
     # Create the function over normal arrays to avoid hitting our workaround.
-    f, params = create_ensemble(dims)
+    tables = create_ensemble(dims)
+    grads = Zygote.gradient(loss_wrap((x...) -> map(DLRM.lookup, x...)), y, tables, I)
 
-    grads = Zygote.gradient(params) do
-        f(I, y)
-    end
-
-    for (i, p) in enumerate(params)
-        u = grads.grads[p]
-        @test isa(u, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
+    # Gradients for the lookup table are at index 2
+    for (i, grad) in enumerate(grads[2])
+        @test isa(grad, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
         # Make sure indices were captured correctly.
-        @test u.indices == I[i]
+        @test grad.indices == I[i]
     end
 
     #####
     ##### Now, verify that `SimpleEmbedding` works.
     #####
 
-    f, params = create_ensemble(EmbeddingTables.maplookup, dims)
-    grads = Zygote.gradient(params) do
-        f(I, y)
-    end
-    for (i, p) in enumerate(params)
-        u = grads.grads[p]
-        @test isa(u, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
+    grads = Zygote.gradient(loss_wrap(DLRM.maplookup), y, tables, I)
+    for (i, grad) in enumerate(grads[2])
+        @test isa(grad, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
         # Make sure indices were captured correctly.
-        @test u.indices == I[i]
+        @test grad.indices == I[i]
     end
 
     #####
-    ##### Test that the ExecutionStrategy default works.
+    ##### Try "PreallocationStrategy"
     #####
 
-    tables = map(dims) do dim
-        return DLRM._EmbeddingTables.SimpleEmbedding(rand(Float32, dim))
-    end
-    f = (I,y) -> Flux.mse(vcat(EmbeddingTables.maplookup(tables, I)...), y)
-    params2 = Flux.Params(tables)
+    f = (x...) -> DLRM.maplookup(DLRM.PreallocationStrategy(), x...)
+    grads2 = Zygote.gradient(loss_wrap(f), y, tables, I)
 
-    grads2 = Zygote.gradient(params2) do
-        f(I, y)
-    end
-    for (i, p) in enumerate(params2)
-        u = grads2.grads[p]
-        @test isa(u, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
+    for (i, grad) in enumerate(grads2[2])
+        @test isa(grad, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
         # Make sure indices were captured correctly.
-        @test u.indices == I[i]
+        @test grad.indices == I[i]
+        @test grad.delta == grads[2][i].delta
+        @test grad.indices == grads[2][i].indices
+    end
+
+    # Retry with prepadding
+    # Use a view of the output to keep dimensions happy with the "y" matrix used as the
+    # dummy target.
+    f = (x...) -> @views(DLRM.maplookup(DLRM.PreallocationStrategy(20), x...)[21:end, :])
+    grads2 = Zygote.gradient(loss_wrap(f), y, tables, I)
+
+    for (i, grad) in enumerate(grads2[2])
+        @test isa(grad, DLRM._EmbeddingTables.SparseEmbeddingUpdate)
+        # Make sure indices were captured correctly.
+        @test grad.indices == I[i]
+        @test grad.delta == grads[2][i].delta
+        @test grad.indices == grads[2][i].indices
     end
 end

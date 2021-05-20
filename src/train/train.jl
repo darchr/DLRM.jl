@@ -7,6 +7,7 @@ using Statistics
 
 # internal
 using .._EmbeddingTables
+using .._Utils
 
 # deps
 using ChainRulesCore: ChainRulesCore
@@ -144,13 +145,14 @@ function train!(loss, model, data, opt; cb = () -> ())
     grads = DLRMGrads(model)
     cb = runall(cb)
 
+    count = 1
     ProgressMeter.@showprogress 1 for d in data
-        @time begin
-            _grads = Zygote.gradient(loss, model, d...)
-            gather!(grads, _grads[1])
-            custom_update!(opt, params, grads)
-            cb()
-        end
+        _grads = Zygote.gradient(loss, model, d...)
+        gather!(grads, _grads[1])
+        custom_update!(opt, params, grads)
+        count += 1
+        count == 1000 && break
+        cb()
     end
 end
 
@@ -159,6 +161,7 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     param_weights = params.weights
     grads_weights = grads.weights
     for i in eachindex(param_weights, grads_weights)
+    #static_thread(ThreadPool(Base.OneTo(length(param_weights))), eachindex(param_weights, grads_weights)) do i
         Flux.update!(opt, param_weights[i], grads_weights[i])
     end
 
@@ -166,6 +169,7 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     param_bias = params.bias
     grads_bias = grads.bias
     for i in eachindex(param_bias, grads_bias)
+    #static_thread(ThreadPool(Base.OneTo(length(param_bias))), eachindex(param_bias, grads_bias)) do i
         Flux.update!(opt, param_bias[i], grads_bias[i])
     end
 

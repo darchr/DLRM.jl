@@ -376,6 +376,7 @@ function kaggle_dlrm(allocator = default_allocator)
         128,
         KAGGLE_EMBEDDING_SIZES;
         constructor = allocator,
+        embedding_constructor = x -> SimpleEmbedding(x, Val(128)),
     )
     # return dlrm(
     #     [13, 512, 256, 64, 16],
@@ -383,6 +384,7 @@ function kaggle_dlrm(allocator = default_allocator)
     #     16,
     #     KAGGLE_EMBEDDING_SIZES;
     #     constructor = allocator,
+    #     embedding_constructor = x -> SimpleEmbedding(x, Val(16)),
     # )
 end
 
@@ -410,7 +412,6 @@ function load_embeddings(file::HDF5.File, allocator = default_allocator)
     names = sort(filter(startswith("emb"), keys(file)); lt = NaturalSort.natural)
     return map(names) do name
         _data = read(file, name)
-        @show size(_data)
         data = allocator(eltype(_data), size(_data))
         data .= _data
         return SimpleEmbedding(data)
@@ -435,15 +436,11 @@ function load_mlp(
     for prefix in prefixes
         weight = read(file["$prefix.weight"])
         bias = read(file["$prefix.bias"])
-        @show size(weight)
 
-        # N.B. Make second to last dense layer use a sigmoid to match the Facebook Pytorch
-        # code.
+        # Choose whether to use Relu or Sigmoid activation function.
         if prefix != prefixes[end] || prefix_filter == "bot_"
-            println("Adding Relu")
             layer = OneDNN.Dense(weight, bias, Flux.relu)
         else
-            println("Adding Sigmoid")
             layer = OneDNN.Dense(weight, bias, Flux.sigmoid)
         end
         push!(layers, layer)

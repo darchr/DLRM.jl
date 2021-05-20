@@ -99,9 +99,9 @@ const VecAET = Vector{<:AbstractEmbeddingTable}
 
 # Dispatch plumbing for-the-win.
 _colwrap(I::AbstractVector{<:AbstractVector}) = I
-_colwrap(I::AbstractMatrix) = eachcol(I)
-maplookup(x::VecAET, i...) = maplookup(DefaultExecutionStrategy(), x, i...)
-function maplookup(strategy::DefaultExecutionStrategy, x::VecAET, I)
+_colwrap(I::AbstractMatrix) = collect(eachcol(I))
+maplookup(x::VecAET, i...) = maplookup(DefaultStrategy(), x, i...)
+function maplookup(strategy::DefaultStrategy, x::VecAET, I)
     return map(lookup, x, _colwrap(I))
 end
 
@@ -144,7 +144,7 @@ end
 struct SimpleParallelStrategy <: AbstractExecutionStrategy end
 function maplookup(::SimpleParallelStrategy, x::Vector{<:AbstractEmbeddingTable}, _I)
     out = Vector{typeof(example(x[1]))}(undef, length(x))
-    I = collect(_colwrap(_I))
+    I = _colwrap(_I)
     Threads.@threads for i in eachindex(x, I)
         out[i] = lookup(x[i], I[i])
     end
@@ -155,18 +155,17 @@ end
 ##### Preallocate destinations
 #####
 
+# The idea of the preallocation strategy is to essentially merge the "Concat" step with
+# the "EmbeddingLookup" step.
+#
+# This may involve preallocating some space in the first few rows of the destination
+# array to make space for inserting the result of the bottom MLP.
 struct PreallocationStrategy <: AbstractExecutionStrategy
     # Allow for extra rows to be placed at the beginning of the destination to allow
     # the results of dense computation to be inserted inplace.
     prependrows::Int
 end
 PreallocationStrategy() = PreallocationStrategy(0)
-
-struct ConcatLookup{T}
-    data::T
-    offset::Int
-    rows::Vector{Int}
-end
 
 _batchsize(x::AbstractVector) = length(first(x))
 _batchsize(x::AbstractMatrix) = size(x, 1)
@@ -175,7 +174,7 @@ function maplookup(
     strategy::PreallocationStrategy, x::Vector{<:AbstractEmbeddingTable{T}}, _I
 ) where {T}
     # Preallocate destination.
-    I = collect(_colwrap(_I))
+    I = _colwrap(_I)
     rows = featuresize.(x)
     offset = strategy.prependrows
     data = similar(example(x[1]), strategy.prependrows + sum(rows), _batchsize(_I))
@@ -191,23 +190,21 @@ function maplookup(
         O = view(data, start:stop, :)
         A = x[i]
         lookup!(O, A, I[i], lookuptype(A))
-        @show start:stop
     end
-    return ConcatLookup(data, offset, rows)
+    return data
 end
 
-# Need to slightly modify the "rrule" since it's likely that the resulting sensitivity
-# will be a single matrix rather than a vector of matrices.
 function ChainRulesCore.rrule(
     ::typeof(maplookup),
     strategy::PreallocationStrategy,
     A::Vector{<:AbstractEmbeddingTable},
-    I,
+    _I,
 )
-    lookup = maplookup(strategy, A, I)
+    I = _colwrap(_I)
+    data = maplookup(strategy, A, I)
     function maplookup_pullback(Δ)
-        f = Slicer(lookup.offset + 1, 1, Δ)
-        δs = map(f, lookup.rows)
+        f = Slicer(strategy.prependrows + 1, 1, Δ)
+        δs = map((y, x) -> SparseEmbeddingUpdate(f(featuresize(y)), x), A, I)
 
         return (
             ChainRulesCore.NO_FIELDS,
@@ -216,5 +213,5 @@ function ChainRulesCore.rrule(
             ChainRulesCore.DoesNotExist(),
         )
     end
-    return lookup, maplookup_pullback
+    return data, maplookup_pullback
 end

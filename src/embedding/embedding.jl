@@ -1,7 +1,8 @@
 module _EmbeddingTables
 
-export SimpleEmbedding, lookup, maplookup, SparseEmbeddingUpdate, SimpleParallelStrategy
-export ConcatLookup
+export SimpleEmbedding, lookup, maplookup, SparseEmbeddingUpdate
+export DefaultStrategy, SimpleParallelStrategy, PreallocationStrategy
+
 
 using .._Utils
 
@@ -14,6 +15,8 @@ using Zygote
 using SIMD
 using MacroTools
 
+const TIMES = UInt[]
+
 # Execution strategies describe how to perform `maplookup` across an ensemble of embedding
 # tables.
 # The `DefaulfExecutionStrategy` merely defaults to serializing `lookup` across each
@@ -21,7 +24,7 @@ using MacroTools
 #
 # This provides an entry point for developing strategies specialized for PMM
 abstract type AbstractExecutionStrategy end
-struct DefaultExecutionStrategy <: AbstractExecutionStrategy end
+struct DefaultStrategy <: AbstractExecutionStrategy end
 
 #####
 ##### Embedding Table API
