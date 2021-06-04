@@ -9,6 +9,7 @@ import ChainRulesCore
 import Flux
 import NNlib
 import OneDNN
+import Polyester
 import ProgressMeter
 import Zygote
 
@@ -104,10 +105,10 @@ function ChainRulesCore.rrule(::typeof(callback), f, x, sym)
         # Do callback with the backprop symbol, then return the gradient.
         f(back(sym))
         return (
-            ChainRulesCore.NO_FIELDS,
-            ChainRulesCore.NO_FIELDS,
+            ChainRulesCore.NoTangent(),
+            ChainRulesCore.NoTangent(),
             Δ,
-            ChainRulesCore.DoesNotExist(),
+            ChainRulesCore.NoTangent(),
         )
     end
     return callback(f, x, sym), callback_pullback
@@ -117,10 +118,10 @@ end
 function ChainRulesCore.rrule(::typeof(callback), ::typeof(donothing), x, sym)
     function callback_pullback(Δ)
         return (
-            ChainRulesCore.NO_FIELDS,
-            ChainRulesCore.NO_FIELDS,
+            ChainRulesCore.NoTangent(),
+            ChainRulesCore.NoTangent(),
             Δ,
-            ChainRulesCore.DoesNotExist(),
+            ChainRulesCore.NoTangent(),
         )
     end
     return x, callback_pullback

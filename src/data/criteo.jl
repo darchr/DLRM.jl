@@ -82,6 +82,7 @@ end
 #####
 
 struct DAC end
+Base.broadcastable(x::DAC) = (x,)
 
 num_labels(::DAC) = 1
 num_continuous_features(::DAC) = 13
@@ -193,7 +194,7 @@ function categorical_values(path::AbstractString, sets = makesets(); save = true
     sets = categorical_values(load(DAC(), path; writable = true), sets)
     if save
         save_path = join((first(splitext(path)), "values.jls"), '_')
-        serialize(save_path, sets)
+        Serialization.serialize(save_path, sets)
     end
     return sets
 end
@@ -225,9 +226,12 @@ function reindex(sets::AbstractVector{<:AbstractSet{T}}) where {T}
 end
 
 function reindex(setsvector::AbstractVector{<:AbstractVector{<:AbstractSet}})
-    dicts = reindex(first(setsvector))
-    for sets in Iterators.drop(setsvector, 1)
-        reindex!(dicts, sets)
+    nsets = length(setsvector)
+    println("Indexing set 1 of $nsets")
+    @time dicts = reindex(first(setsvector))
+    for (i, sets) in enumerate(Iterators.drop(setsvector, 1))
+        println("Indexing set $(i+1) of $nsets")
+        @time reindex!(dicts, sets)
     end
     return dicts
 end
@@ -368,12 +372,42 @@ const KAGGLE_EMBEDDING_SIZES = [
     142572,
 ]
 
+const TERABYTE_EMBEDDING_SIZES = [
+    227605432,
+    39060,
+    17295,
+    7424,
+    20265,
+    3,
+    7122,
+    1543,
+    63,
+    130229467,
+    3067956,
+    405282,
+    10,
+    2209,
+    11938,
+    155,
+    4,
+    976,
+    14,
+    292775614,
+    40790948,
+    187188510,
+    590152,
+    12973,
+    108,
+    36,
+]
+
 default_allocator(::Type{T}, dims...) where {T} = Array{T}(undef, dims...)
 function kaggle_dlrm(allocator = default_allocator)
     return dlrm(
         [13, 512, 256, 128],
-        [512, 256, 1],
+        [1024, 1024, 512, 256, 1],
         128,
+        #TERABYTE_EMBEDDING_SIZES;
         KAGGLE_EMBEDDING_SIZES;
         constructor = allocator,
         embedding_constructor = x -> SimpleEmbedding(x, Val(128)),
@@ -454,7 +488,7 @@ function load_inputs(file::HDF5.File)
 
     # The sparse inputs are stored as individual vectors.
     # Concatenate them together into a single 2D matrix.
-    prefixes = sort(filter(startswith("input_emb"), keys(file)), lt = NaturalSort.natural)
+    prefixes = sort(filter(startswith("input_emb"), keys(file)); lt = NaturalSort.natural)
     sparse = read.(getindex.(Ref(file), prefixes))
     for _a in sparse
         _a .+= 1

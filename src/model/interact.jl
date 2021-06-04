@@ -41,7 +41,7 @@ function ChainRulesCore.rrule(
         f = Slicer(xsize + 1, 1, Δmaterialized)
         δYs = map(f, ysizes)
 
-        return (ChainRulesCore.NO_FIELDS, δX, δYs)
+        return (ChainRulesCore.NoTangent(), δX, δYs)
     end
 
     return out, fast_vcat_pullback
@@ -54,7 +54,7 @@ function fast_vcat(X, ys::AbstractMatrix)
     # Sanity check that the proper amount of space was reserved.
     vy = view(ys, 1:size(x, 1), :)
     #Threads.@threads for i in eachindex(x, vy)
-     for i in eachindex(x, vy)
+    for i in eachindex(x, vy)
         @inbounds(vy[i] = x[i])
     end
     return ys
@@ -70,7 +70,7 @@ function ChainRulesCore.rrule(
     function fast_vcat_pullback(Δ)
         Δmaterialized = OneDNN.materialize(Δ; allowreorder = false)
         Δx = view(Δmaterialized, 1:xsize, :)
-        return (ChainRulesCore.NO_FIELDS, Δx, Δ)
+        return (ChainRulesCore.NoTangent(), Δx, Δ)
     end
     return out, fast_vcat_pullback
 end
@@ -113,7 +113,7 @@ function ChainRulesCore.rrule(::typeof(self_batched_mul), x)
         attributes = OneDNN.Attributes()
         append!(attributes, postops)
         OneDNN.matmul!(out, X, Δ; attributes = attributes)
-        return (ChainRulesCore.NO_FIELDS, OneDNN.materialize(out))
+        return (ChainRulesCore.NoTangent(), OneDNN.materialize(out))
     end
 
     return y, back
@@ -133,15 +133,20 @@ function triangular_slice(X::AbstractArray{T,3}) where {T}
     ncols = div((sz * sz) - sz, 2)
 
     O = similar(X, eltype(X), ncols, batchsize)
-    Threads.@threads for batch in 0:(batchsize - 1)
+    #Threads.@threads for batch in 0:(batchsize - 1)
+    Polyester.@batch per=core for batch in 0:(batchsize - 1)
         Xbase = batch * sz * sz
         Obase = batch * ncols
         row = 1
         @inbounds for i = 1:(sz - 1)
-            Xindex = sz * i + Xbase + 1
-            Oindex = row + Obase
+            Xindex = sz * i + Xbase
+            Oindex = row + Obase - 1
             elements_copied = i
-            copyto!(O, Oindex, X, Xindex, elements_copied)
+            #copyto!(O, Oindex, X, Xindex, elements_copied)
+            @simd for j in 1:elements_copied
+                @inbounds(O[Oindex + j] = X[Xindex + j])
+            end
+            #Base.unsafe_copyto!(pointer(O, Oindex), pointer(X, Xindex), elements_copied)
             row += elements_copied
         end
     end
@@ -154,7 +159,7 @@ function triangular_slice_adjoint(Δ, sz::NTuple{3,Int})
     A = similar(Δ, eltype(Δ), sz)
     batchsize = sz[3]
     nrows = sz[2]
-    Threads.@threads for batch = 1:batchsize
+    Polyester.@batch per=core for batch in 1:batchsize
         for j in axes(A, 2), i in axes(A, 1)
             # Fast case - fill diagonal with zeros
             if i >= j
@@ -278,7 +283,7 @@ function ChainRulesCore.rrule(::typeof(triangular_slice), x)
     sz = size(x)
     function triangular_slice_pullback(Δ)
         return (
-            ChainRulesCore.NO_FIELDS, triangular_slice_adjoint(OneDNN.materialize(Δ), sz)
+                ChainRulesCore.NoTangent(), triangular_slice_adjoint(OneDNN.materialize(Δ), sz)
         )
     end
     return triangular_slice(x), triangular_slice_pullback

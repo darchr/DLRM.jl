@@ -13,6 +13,7 @@ using .._Utils
 using ChainRulesCore: ChainRulesCore
 using Flux: Flux
 using OneDNN: OneDNN
+using Polyester: Polyester
 using ProgressMeter: ProgressMeter
 import UnPack: @unpack
 using Zygote: Zygote
@@ -32,11 +33,11 @@ function ChainRulesCore.rrule(::typeof(bce_loss), ŷ, y)
         ϵ = eps(eltype(ŷ))
 
         # Adjust for the mean
-        Δ = Δ ./ length(y)
+        Δ = Δ / length(y)
 
         a = @. Δ * ((one(Δ) - y) / (one(Δ) - ŷ + ϵ) - (y / (ŷ + ϵ)))
         b = @. Δ * (log(one(Δ) - ŷ + ϵ) - log(ŷ + ϵ))
-        return (ChainRulesCore.NO_FIELDS, a, b)
+        return (ChainRulesCore.NoTangent(), a, b)
     end
 
     return z, bce_pullback
@@ -51,9 +52,6 @@ wrap_loss(loss_fn; kw...) = LossWrapper(loss_fn, (;kw...,))
 
 function (wrapper::LossWrapper)(model, labels, args...)
     loss = wrapper.f(model(args...; wrapper.kw...), labels)
-    # Zygote.ignore() do
-    #     @show loss
-    # end
     return loss
 end
 
@@ -140,6 +138,8 @@ gather_embeddings!(x, vec) = append!(x.embeddings, vec)
 ##### Train Loop
 #####
 
+const TIMES = UInt64[]
+
 function train!(loss, model, data, opt; cb = () -> ())
     params = DLRMParams(model)
     grads = DLRMGrads(model)
@@ -151,7 +151,7 @@ function train!(loss, model, data, opt; cb = () -> ())
         gather!(grads, _grads[1])
         custom_update!(opt, params, grads)
         count += 1
-        count == 1000 && break
+        count == 20 && break
         cb()
     end
 end
@@ -160,8 +160,8 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     # Weight Update
     param_weights = params.weights
     grads_weights = grads.weights
-    for i in eachindex(param_weights, grads_weights)
-    #static_thread(ThreadPool(Base.OneTo(length(param_weights))), eachindex(param_weights, grads_weights)) do i
+    #for i in eachindex(param_weights, grads_weights)
+    static_thread(ThreadPool(Base.OneTo(length(param_weights))), eachindex(param_weights, grads_weights)) do i
         Flux.update!(opt, param_weights[i], grads_weights[i])
     end
 
@@ -176,111 +176,12 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     # Embedding Update
     param_embeddings = params.embeddings
     grads_embeddings = grads.embeddings
-    Threads.@threads for i in eachindex(param_embeddings, grads_embeddings)
+    start = time_ns()
+    #Threads.@threads for i in eachindex(param_embeddings, grads_embeddings)
+    Polyester.@batch per=thread for i in eachindex(param_embeddings, grads_embeddings)
         Flux.update!(opt, param_embeddings[i], grads_embeddings[i])
     end
+    push!(TIMES, time_ns() - start)
 end
-
-
-# include("backprop")
-
-# mutable struct TestRun{F,D}
-#     f::F
-#     dataset::D
-#     count::Int
-#     every::Int
-# end
-#
-# function (T::TestRun)()
-#     T.count += 1
-#     !iszero(mod(T.count, T.every)) && return nothing
-#
-#     # Run the test set.
-#     total = 0
-#     correct = 0
-#     println("Testing")
-#     @time for (dense, sparse, labels) in T.dataset
-#         result = round.(Int, T.f(dense, sparse))
-#         labels = clamp.(labels, 0, 1)
-#
-#         # Update the total
-#         total += length(result)
-#
-#         #println(result .- labels)
-#         # Update the number correct.
-#         correct += count(x -> x[1] == x[2], zip(result, labels))
-#     end
-#     println("Iteration: $(T.count)")
-#     println("Accuracy: $(correct / total)")
-#     println()
-#
-#     if div(T.count, T.every) == 10
-#         throw(Flux.Optimise.StopException())
-#     end
-# end
-#
-# # Routines for training DLRM.
-# function top(;
-#     debug = false,
-#     # Percent of the dataset to reserve for testing.
-#     testfraction = 0.125,
-#     train_batchsize = 128,
-#     test_batchsize = 16384,
-#     #test_batchsize = 128,
-#     test_frequency = 10000,
-#     learning_rate = 0.1,
-# )
-#
-#     #####
-#     ##### Import dataset
-#     #####
-#
-#     dataset = load(DAC(), joinpath(homedir(), "data", "dac", "train.bin"))
-#
-#     # Split into training and testing regions.
-#     num_test_samples = ceil(Int, testfraction * length(dataset))
-#
-#     trainset = @views dataset[1:(end - num_test_samples - 1)]
-#     testset = @views dataset[(end - num_test_samples):end]
-#
-#     train_loader = Extractor(trainset, train_batchsize)
-#     test_loader = Extractor(testset, test_batchsize)
-#
-#     model = kaggle_dlrm()
-#
-#     loss =
-#         (dense, sparse, labels) -> begin
-#             # Clamp for stability
-#             forward = model(dense, sparse)
-#             ls = sum(Flux.binarycrossentropy.(forward, vec(labels))) / length(forward)
-#             isnan(ls) && throw(error("NaN Loss"))
-#             return ls
-#         end
-#
-#     # The inner training loop
-#     callbacks = [TestRun(model, test_loader, 0, test_frequency)]
-#
-#     # Warmup
-#     opt = Flux.Descent(0.01)
-#
-#     count = 1
-#     params = Flux.params(model)
-#     for (dense, sparse, labels) in train_loader
-#         grads = gradient(params) do
-#             loss(dense, sparse, labels)
-#         end
-#         Flux.Optimise.update!(opt, params, grads)
-#         count += 1
-#         count == 1000 && break
-#     end
-#     opt = Flux.Descent(learning_rate)
-#
-#     if !debug
-#         Flux.train!(loss, Flux.params(model), train_loader, opt; cb = callbacks)
-#     end
-#
-#     return model, loss, train_loader, opt
-# end
-#
 
 end # module

@@ -9,6 +9,7 @@ using .._Utils
 # For defining sparse adjoints.
 import ChainRulesCore
 using Flux
+import Polyester
 using Zygote
 
 # To vectorize lookup operations
@@ -46,7 +47,9 @@ Base.IndexStyle(::AbstractEmbeddingTable) = Base.IndexLinear()
 
 featuresize(A::AbstractMatrix) = size(A, 1)
 lookuptype(::AbstractEmbeddingTable) = Dynamic()
-columnpointer(A::AbstractMatrix, i::Integer) = pointer(A, featuresize(A) * (i-1) + 1)
+function columnpointer(A::AbstractMatrix{T}, i::Integer) where {T}
+    return pointer(A) + strides(A)[2] * sizeof(T) * (i-1)
+end
 @inline columnview(A::AbstractMatrix, i) = view(A, 1:size(A,1), i)
 
 # Interface

@@ -83,9 +83,9 @@ end
 function ChainRulesCore.rrule(::typeof(lookup), A::AbstractEmbeddingTable, I)
     function lookup_pullback(Δ)
         return (
-            ChainRulesCore.NO_FIELDS,
+            ChainRulesCore.NoTangent(),
             SparseEmbeddingUpdate(Δ, I),
-            ChainRulesCore.DoesNotExist(),
+            ChainRulesCore.NoTangent(),
         )
     end
     return lookup(A, I), lookup_pullback
@@ -114,10 +114,10 @@ function ChainRulesCore.rrule(
 )
     function maplookup_pullback(Δs)
         return (
-            ChainRulesCore.NO_FIELDS,
-            ChainRulesCore.NO_FIELDS,
+            ChainRulesCore.NoTangent(),
+            ChainRulesCore.NoTangent(),
             ChainRulesCore.@thunk(map(SparseEmbeddingUpdate, Δs, _colwrap(I))),
-            ChainRulesCore.DoesNotExist(),
+            ChainRulesCore.NoTangent(),
         )
     end
     result = maplookup(strategy, A, I)
@@ -146,6 +146,7 @@ function maplookup(::SimpleParallelStrategy, x::Vector{<:AbstractEmbeddingTable}
     out = Vector{typeof(example(x[1]))}(undef, length(x))
     I = _colwrap(_I)
     Threads.@threads for i in eachindex(x, I)
+    #Polyester.@batch for i in eachindex(x, I)
         out[i] = lookup(x[i], I[i])
     end
     return out
@@ -177,18 +178,22 @@ function maplookup(
     I = _colwrap(_I)
     rows = featuresize.(x)
     offset = strategy.prependrows
+    batchsize = _batchsize(_I)
     data = similar(example(x[1]), strategy.prependrows + sum(rows), _batchsize(_I))
 
     # For deciding where to index
     rows_sum = cumsum(rows)
     pushfirst!(rows_sum, 0)
 
-    Threads.@threads for i in eachindex(x, I)
+    #Threads.@threads for i in eachindex(x, I)
+    Polyester.@batch per=thread for i in eachindex(x)
         start = 1 + offset + rows_sum[i]
         stop = offset + rows_sum[i + 1]
+
         # Create destination view
-        O = view(data, start:stop, :)
+        O = view(data, start:stop, Base.OneTo(batchsize))
         A = x[i]
+
         lookup!(O, A, I[i], lookuptype(A))
     end
     return data
@@ -207,10 +212,10 @@ function ChainRulesCore.rrule(
         δs = map((y, x) -> SparseEmbeddingUpdate(f(featuresize(y)), x), A, I)
 
         return (
-            ChainRulesCore.NO_FIELDS,
-            ChainRulesCore.NO_FIELDS,
+            ChainRulesCore.NoTangent(),
+            ChainRulesCore.NoTangent(),
             δs,
-            ChainRulesCore.DoesNotExist(),
+            ChainRulesCore.NoTangent(),
         )
     end
     return data, maplookup_pullback

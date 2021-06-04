@@ -1,5 +1,8 @@
 module _Utils
 
+export zero!
+zero!(x) = x .= zero(eltype(x))
+
 export ThreadPool, dynamic_thread, static_thread
 include("threading.jl")
 
