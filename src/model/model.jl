@@ -5,13 +5,13 @@ using .._Utils
 
 export DLRMModel, dlrm
 
-import ChainRulesCore
-import Flux
-import NNlib
-import OneDNN
-import Polyester
-import ProgressMeter
-import Zygote
+using ChainRulesCore: ChainRulesCore
+using Flux: Flux
+using NNlib: NNlib
+using OneDNN: OneDNN
+using Polyester: Polyester
+using ProgressMeter: ProgressMeter
+using Zygote: Zygote
 
 const TIMES = UInt[]
 
@@ -63,7 +63,9 @@ function create_embeddings(ncols::Integer, rowcounts::AbstractVector{<:Integer};
 end
 
 function create_embeddings(finish, ncols, rowcounts, initialize)
-    progress_meter = ProgressMeter.Progress(length(rowcounts), 1, "Building Embedding Tables ...")
+    progress_meter = ProgressMeter.Progress(
+        length(rowcounts), 1, "Building Embedding Tables ..."
+    )
     embeddings = map(1:length(rowcounts)) do i
         nrows = rowcounts[i]
         # Construct and initialize the underlying data.
@@ -92,41 +94,29 @@ end
 Flux.@functor DLRMModel (bottom_mlp, embeddings, top_mlp)
 
 # Setup a scheme for recording callbacks.
-donothing(x) = nothing
 back(x) = Symbol("$(x)_back")
 
-function callback(f, x, sym)
-    f(sym)
-    return x
+function callback(cb::C, sym::Symbol, f::F, x...) where {C,F}
+    y = f(x...)
+    cb(sym)
+    return y
 end
 
-function ChainRulesCore.rrule(::typeof(callback), f, x, sym)
-    function callback_pullback(Δ)
-        # Do callback with the backprop symbol, then return the gradient.
-        f(back(sym))
-        return (
-            ChainRulesCore.NoTangent(),
-            ChainRulesCore.NoTangent(),
-            Δ,
-            ChainRulesCore.NoTangent(),
-        )
+Zygote.@adjoint function callback(
+    cb::C, sym::Symbol, f::F, x...
+) where {C,F}
+    y, pullback = Zygote._pullback(__context__, f, x...)
+    cb(sym)
+    function callback_pullback(Δ...)
+        # Perform pullback computation the call the callback
+        dx = pullback(Δ...)
+        cb(back(sym))
+        return (nothing, nothing, dx...)
     end
-    return callback(f, x, sym), callback_pullback
+    return y, callback_pullback
 end
 
-# Special case the "donothing" function to help out the compiler just a little bit.
-function ChainRulesCore.rrule(::typeof(callback), ::typeof(donothing), x, sym)
-    function callback_pullback(Δ)
-        return (
-            ChainRulesCore.NoTangent(),
-            ChainRulesCore.NoTangent(),
-            Δ,
-            ChainRulesCore.NoTangent(),
-        )
-    end
-    return x, callback_pullback
-end
-
+# Model Constructor
 function (D::DLRMModel)(
     dense,
     sparse;
@@ -136,11 +126,11 @@ function (D::DLRMModel)(
     cb = donothing,
 )
     # Wrap everything in a `callback` - default will compile away.
-    y = callback(cb, maplookup(strategy, D.embeddings, sparse), :lookup)
-    x = callback(cb, D.bottom_mlp(dense), :bottom_mlp)
-    z = callback(cb, D.interaction(x, y), :interaction)
-    out = callback(cb, OneDNN.materialize(D.top_mlp(z)), :top_mlp)
-    return vec(out)
+    y = callback(cb, :lookup, maplookup, strategy, D.embeddings, sparse)
+    x = callback(cb, :bottom_mlp, D.bottom_mlp, dense)
+    z = callback(cb, :interaction, D.interaction, x, y)
+    out = callback(cb, :top_mlp, D.top_mlp, z)
+    return vec(OneDNN.materialize(out))
 end
 
 # inplace version of `Flux.glorot_normal`
@@ -172,10 +162,7 @@ function dlrm(
     # Create the bottom MLP
     bottom_mlp = create_mlp(bottom_mlp_sizes, 0; weight_init = weight_init)
     embeddings = create_embeddings(
-        embedding_constructor,
-        sparse_feature_size,
-        embedding_sizes,
-        weight_init,
+        embedding_constructor, sparse_feature_size, embedding_sizes, weight_init
     )
 
     # Compute the size of the first layer for the top mlp.
@@ -189,11 +176,7 @@ function dlrm(
 
     top_layer_input_size = div(pre_triangle_size^2 - pre_triangle_size, 2) + bottom_out_size
     top_mlp_sizes = vcat([top_layer_input_size], top_mlp_sizes)
-    top_mlp = create_mlp(
-        top_mlp_sizes,
-        lastindex(top_mlp_sizes);
-        weight_init = weight_init,
-    )
+    top_mlp = create_mlp(top_mlp_sizes, lastindex(top_mlp_sizes); weight_init = weight_init)
 
     return DLRMModel(bottom_mlp, embeddings, interaction, top_mlp)
 end

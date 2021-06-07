@@ -2,16 +2,19 @@ module _Train
 
 export bce_loss
 
+
 # stdlib
 using Statistics
 
 # internal
 using .._EmbeddingTables
+using .._Model
 using .._Utils
 
 # deps
 using ChainRulesCore: ChainRulesCore
 using Flux: Flux
+using LoopVectorization: LoopVectorization
 using OneDNN: OneDNN
 using Polyester: Polyester
 using ProgressMeter: ProgressMeter
@@ -26,17 +29,18 @@ include("utils.jl")
 
 bce_loss(ŷ, y) = Flux.Losses.binarycrossentropy(ŷ, y; agg = mean)
 
-function ChainRulesCore.rrule(::typeof(bce_loss), ŷ, y)
+function ChainRulesCore.rrule(::typeof(bce_loss), ŷ::AbstractVector{T}, y::AbstractVector{T}) where {T}
     z = bce_loss(ŷ, y)
+    ly = length(y)
 
-    function bce_pullback(Δ)
-        ϵ = eps(eltype(ŷ))
-
+    function bce_pullback(_Δ)
         # Adjust for the mean
-        Δ = Δ / length(y)
+        Δ = _Δ / ly
+        ϵ = eps(T)
 
-        a = @. Δ * ((one(Δ) - y) / (one(Δ) - ŷ + ϵ) - (y / (ŷ + ϵ)))
-        b = @. Δ * (log(one(Δ) - ŷ + ϵ) - log(ŷ + ϵ))
+        # Because why not!
+        a = LoopVectorization.@turbo @. Δ * ((one(Δ) - y) / (one(Δ) - ŷ + ϵ) - (y / (ŷ + ϵ)))
+        b = LoopVectorization.@turbo @. Δ * (log(one(Δ) - ŷ + ϵ) - log(ŷ + ϵ))
         return (ChainRulesCore.NoTangent(), a, b)
     end
 
@@ -48,10 +52,19 @@ struct LossWrapper{F,NT}
     kw::NT
 end
 
+function __cb(loss::LossWrapper)
+    kw = loss.kw
+    if hasproperty(kw, :cb)
+        return kw.cb
+    end
+    return donothing
+end
+
 wrap_loss(loss_fn; kw...) = LossWrapper(loss_fn, (;kw...,))
 
 function (wrapper::LossWrapper)(model, labels, args...)
-    loss = wrapper.f(model(args...; wrapper.kw...), labels)
+    out = model(args...; wrapper.kw...)
+    loss = _Model.callback(__cb(wrapper), :loss, wrapper.f, out, labels)
     return loss
 end
 
@@ -140,18 +153,23 @@ gather_embeddings!(x, vec) = append!(x.embeddings, vec)
 
 const TIMES = UInt64[]
 
-function train!(loss, model, data, opt; cb = () -> ())
+function train!(loss, model, data, opt; cb = () -> (), maxiters = 20)
     params = DLRMParams(model)
     grads = DLRMGrads(model)
     cb = runall(cb)
 
     count = 1
+    telemetry = __cb(loss)
     ProgressMeter.@showprogress 1 for d in data
+        telemetry(:start)
         _grads = Zygote.gradient(loss, model, d...)
+        telemetry(:grads_done)
         gather!(grads, _grads[1])
         custom_update!(opt, params, grads)
+        telemetry(:update_done)
+
         count += 1
-        count == 20 && break
+        count == maxiters && break
         cb()
     end
 end
