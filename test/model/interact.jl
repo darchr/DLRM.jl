@@ -42,7 +42,7 @@
     grads_bmm_t = bmm_back_t(Δbmm)
     @test isapprox(grads_bmm_ref[2], grads_bmm_t[2])
 
-    # Triangular Slize
+    # Triangular Slice
     y_ref, back_ref = Zygote._pullback(DLRM._Model.triangular_slice_reference, bmm_ref)
     y_opt, back_opt = Zygote._pullback(DLRM._Model.triangular_slice, bmm_ref)
     @test isapprox(y_ref, y_opt)
@@ -56,8 +56,11 @@
     ##### Test whole pipeline
     #####
 
-    x = randn(Float32, 256, 128)
-    ys = [randn(Float32, 256, 128) for _ in 1:20]
+    # x = randn(Float32, 256, 128)
+    # ys = [randn(Float32, 256, 128) for _ in 1:20]
+
+    x = randn(Float32, 256, 2^15)
+    ys = [randn(Float32, 256, 2^15) for _ in 1:20]
 
     # x = randn(Float32, 10, 5)
     # ys = [randn(Float32, 10, 5) for _ in 1:4]

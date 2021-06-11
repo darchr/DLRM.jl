@@ -6,7 +6,8 @@
     model = DLRM.load_hdf5(io)
     labels, dense, sparse = DLRM.load_inputs(io)
 
-    y = DLRM.maplookup(DLRM.SimpleParallelStrategy(), model.embeddings, sparse)
+    strategy = DLRM.PreallocationStrategy(size(last(model.bottom_mlp).weights, 2))
+    y = DLRM.maplookup(strategy, model.embeddings, sparse)
     x = model.bottom_mlp(dense)
     z = model.interaction(x, y)
     out = model.top_mlp(z)
@@ -27,8 +28,8 @@
 
     # More agressive
     strategies = [
-        DLRM.DefaultStrategy(),
-        DLRM.SimpleParallelStrategy(),
+        # DLRM.DefaultStrategy(),
+        # DLRM.SimpleParallelStrategy(),
         DLRM.PreallocationStrategy(size(last(model.bottom_mlp).weights, 2))
     ]
 
@@ -46,6 +47,9 @@
 
         learning_rate = 10.0
         opt = Flux.Descent(learning_rate)
+
+        # Run once to update data formats
+        _ = Zygote.gradient(loss_fn, model, labels, dense, sparse)
 
         params = DLRM._Train.DLRMParams(model)
         grads = DLRM._Train.DLRMGrads(model)

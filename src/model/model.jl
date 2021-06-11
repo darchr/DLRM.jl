@@ -7,6 +7,7 @@ export DLRMModel, dlrm
 
 using ChainRulesCore: ChainRulesCore
 using Flux: Flux
+using LoopVectorization: LoopVectorization
 using NNlib: NNlib
 using OneDNN: OneDNN
 using Polyester: Polyester

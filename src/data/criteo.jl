@@ -403,6 +403,8 @@ const TERABYTE_EMBEDDING_SIZES = [
 
 default_allocator(::Type{T}, dims...) where {T} = Array{T}(undef, dims...)
 function kaggle_dlrm(allocator = default_allocator)
+    v = default_allocator(Float32, 1, 1)
+    dot = _Model.DotInteraction(v)
     return dlrm(
         [13, 512, 256, 128],
         [1024, 1024, 512, 256, 1],
@@ -411,6 +413,7 @@ function kaggle_dlrm(allocator = default_allocator)
         KAGGLE_EMBEDDING_SIZES;
         constructor = allocator,
         embedding_constructor = x -> SimpleEmbedding(x, Val(128)),
+        interaction = dot,
     )
     # return dlrm(
     #     [13, 512, 256, 64, 16],
@@ -439,7 +442,8 @@ function load_hdf5(file::HDF5.File, allocator = default_allocator)
     embeddings = load_embeddings(file, allocator)
     bottom_mlp = load_mlp(file, "bot_", allocator)
     top_mlp = load_mlp(file, "top_", allocator)
-    return DLRMModel(bottom_mlp, embeddings, _Model.dot_interaction, top_mlp)
+    dot = _Model.DotInteraction(Matrix{Float32}(undef, 1, 1))
+    return DLRMModel(bottom_mlp, embeddings, dot, top_mlp)
 end
 
 function load_embeddings(file::HDF5.File, allocator = default_allocator)

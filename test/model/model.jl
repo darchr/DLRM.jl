@@ -1,10 +1,13 @@
 # Test the whole model.
 function makefunction()
+    dot = DLRM._Model.DotInteraction(Matrix{Float32}(undef, 1, 1))
+
     dlrm = DLRM.dlrm(
         [512, 512, 64],
         [1024, 1024, 1024, 1],
         64,
-        [100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000],
+        [100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000];
+        interaction = dot,
     )
 
     return f = (d, s, e) -> Flux.mse(dlrm(d, s), e), dlrm

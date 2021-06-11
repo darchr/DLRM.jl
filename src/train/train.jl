@@ -154,6 +154,9 @@ gather_embeddings!(x, vec) = append!(x.embeddings, vec)
 const TIMES = UInt64[]
 
 function train!(loss, model, data, opt; cb = () -> (), maxiters = 20)
+    # Run once to make sure data formats are initialized.
+    _ = Zygote.gradient(loss, model, first(data)...)
+
     params = DLRMParams(model)
     grads = DLRMGrads(model)
     cb = runall(cb)
@@ -178,8 +181,8 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     # Weight Update
     param_weights = params.weights
     grads_weights = grads.weights
-    #for i in eachindex(param_weights, grads_weights)
-    static_thread(ThreadPool(Base.OneTo(length(param_weights))), eachindex(param_weights, grads_weights)) do i
+
+    Polyester.@batch per=thread for i in eachindex(param_weights, grads_weights)
         Flux.update!(opt, param_weights[i], grads_weights[i])
     end
 
@@ -187,19 +190,15 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     param_bias = params.bias
     grads_bias = grads.bias
     for i in eachindex(param_bias, grads_bias)
-    #static_thread(ThreadPool(Base.OneTo(length(param_bias))), eachindex(param_bias, grads_bias)) do i
         Flux.update!(opt, param_bias[i], grads_bias[i])
     end
 
     # Embedding Update
     param_embeddings = params.embeddings
     grads_embeddings = grads.embeddings
-    start = time_ns()
-    #Threads.@threads for i in eachindex(param_embeddings, grads_embeddings)
     Polyester.@batch per=thread for i in eachindex(param_embeddings, grads_embeddings)
         Flux.update!(opt, param_embeddings[i], grads_embeddings[i])
     end
-    push!(TIMES, time_ns() - start)
 end
 
 end # module

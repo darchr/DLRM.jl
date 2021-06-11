@@ -31,7 +31,7 @@ function (S::Slicer{T,N})(sz) where {T,N}
     current_index = S.current_index
     range = current_index:(current_index + sz - 1)
     inds = ntuple(
-        i -> i == S.concat_dim ? range : Base.OneTo(size(S.captured_array, i)), Val(N)
+        i -> i == S.concat_dim ? range : 1:size(S.captured_array, i), Val(N)
     )
     S.current_index += sz
     return view(S.captured_array, inds...)
