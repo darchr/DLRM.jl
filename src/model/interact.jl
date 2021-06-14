@@ -154,7 +154,7 @@ end
 function triangular_slice_back(Δ, sz::NTuple{3,Int})
     A = similar(Δ, eltype(Δ), sz)
     batchsize = sz[3]
-    Polyester.@batch per = core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
         vA = view(A, :, :, batch)
         vΔ = view(Δ, :, batch)
         triangular_slice_back_kernel!(vA, vΔ)
@@ -179,6 +179,11 @@ function triangular_slice_back_kernel!(A::AbstractMatrix{T}, O::AbstractVector) 
     return nothing
 end
 
+# Version of the triangular slice inner kernel that fuses adding the result with
+# its transpose.
+#
+# Essentially, instead of zeroing the lower triangle, it populates it so the final
+# result is symmetric.
 function triangular_slice_back_fuse_add_transpose_kernel!(
     A::AbstractMatrix{T}, O::AbstractVector
 ) where {T}
@@ -215,6 +220,7 @@ end
 ############################################################################################
 
 # Alternative implementation - perform the whole thing one batch at a time
+# Thank you LoopVectorization for being awesome.
 function gemmavx!(C, A, B)
     LoopVectorization.@turbo for m ∈ axes(A, 1), n ∈ axes(B, 2)
         Cmn = zero(eltype(C))
@@ -242,12 +248,6 @@ function process_slice!(
     triangular_slice_kernel!(view(dst, offset:length(dst)), scratch)
     return nothing
 end
-
-struct LazyCat{T}
-    layers::Vector{T}
-end
-
-#function Base.view(
 
 #####
 ##### DotInteraction

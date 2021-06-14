@@ -92,3 +92,13 @@
         @test isapprox(r, t)
     end
 end
+
+@testset "Testing Optimized Interaction" begin
+    # gemmavx!
+    x = randn(Float32, 10, 20)
+    y = randn(Float32, 20, 40)
+    z = randn(Float32, 10, 40)
+
+    DLRM._Model.gemmavx!(z, x, y)
+    @test isapprox(z, x * y)
+end

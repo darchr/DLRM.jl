@@ -3,6 +3,7 @@ module DLRM
 export DLRMModel, dlrm
 
 # stdlib
+using LinearAlgebra: LinearAlgebra
 using Mmap: Mmap
 using SparseArrays: SparseArrays
 using Random: Random
@@ -10,7 +11,7 @@ using Serialization: Serialization
 import Statistics: mean
 
 # "Internal" dependencies
-using CachedArrays: CachedArrays
+using CachedArrays
 using OneDNN: OneDNN
 
 # External Dependencies
@@ -49,6 +50,33 @@ tocached(::Type{T}, m::M) where {T,M} = ToCached{T,M}(m)
 OneDNN.ancestor(x::CachedArrays.CachedArray) = x
 (f::ToCached{T})(x...) where {T} = CachedArrays.CachedArray{T}(undef, f.manager, x)
 (f::ToCached)(::Type{T}, x...) where {T} = CachedArrays.CachedArray{T}(undef, f.manager, x)
+
+#####
+##### CachedArrays Compatility
+#####
+
+# Make the destination writable for initialization.
+@hint function _Model.multithread_init(f, data::CachedArray)
+    return __invoke__(f, __writable__(data))
+end
+
+@hint function Base.fill!(A::CachedArray, x)
+    # Preserve the semantics of "fill!" by returning the filled object, but return
+    # the original object rather than the potentially newly created writable one.
+    __invoke__(__writable__(A), x)
+    return A
+end
+
+const MaybeTranspose{T} = Union{T,LinearAlgebra.Transpose{<:Any,<:T}}
+@hint function OneDNN.creatememory(x::MaybeTranspose{CachedArray}, desc)
+    return __invoke__(__readable__(x), desc)
+end
+
+@hint function OneDNN.Dense(
+    weights::MaybeTranspose{CachedArray}, bias::CachedArray, args...
+)
+    return __invoke__(__readable__(weights), __readable__(bias), args...)
+end
 
 #
 # # Data Utils
