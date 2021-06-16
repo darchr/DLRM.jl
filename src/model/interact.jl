@@ -48,9 +48,7 @@ function ChainRulesCore.rrule(
 end
 
 # Deal with the `PreallocationStrategy`.
-function fast_vcat(X, ys::AbstractMatrix)
-    x = OneDNN.materialize(X)
-
+function fast_vcat(x, ys::AbstractMatrix)
     # Sanity check that the proper amount of space was reserved.
     vy = view(ys, 1:size(x, 1), :)
     #Threads.@threads for i in eachindex(x, vy)
@@ -275,12 +273,14 @@ function init!(x::DotInteraction{T}, sz) where {T}
     return nothing
 end
 
-function (dot::DotInteraction)(X, Ys::AbstractMatrix; return_t = false)
-    d, batchsize = size(X)
-    x = OneDNN.materialize(X)
+function (dot::DotInteraction)(x::OneDNN.Memory, ys::AbstractMatrix; kw...)
+    return dot(OneDNN.materialize(x), ys; kw...)
+end
 
-    combined = fast_vcat(X, Ys)
-    T = reshape(OneDNN.materialize(combined), d, :, batchsize)
+function (dot::DotInteraction)(x::AbstractMatrix, ys::AbstractMatrix; return_t = false)
+    d, batchsize = size(x)
+    combined = fast_vcat(x, ys)
+    T = reshape(combined, (d, :, batchsize))
     out = process_batches(dot, T, x)
 
     # Rely on constant propagation to optimize out any instability caused by
