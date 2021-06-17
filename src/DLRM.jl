@@ -16,6 +16,7 @@ using OneDNN: OneDNN
 
 # External Dependencies
 using ChainRulesCore: ChainRulesCore
+using ConstructionBase: ConstructionBase
 using DataStructures: DataStructures
 using Flux: Flux
 using HDF5: HDF5
@@ -46,7 +47,7 @@ struct ToCached{T,M,S}
     status::S
 end
 
-function tocached(m::CachedArrays.CacheManager, s = CachedArrays.NotBusy())
+function tocached(m, s = CachedArrays.NotBusy())
     return tocached(Float32, m, s)
 end
 function tocached(::Type{T}, m::M, s::S = CachedArrays.NotBusy()) where {T,M,S}
@@ -54,16 +55,36 @@ function tocached(::Type{T}, m::M, s::S = CachedArrays.NotBusy()) where {T,M,S}
 end
 
 OneDNN.ancestor(x::CachedArrays.CachedArray) = x
-function (f::ToCached{T})(x...) where {T}
+OneDNN.ancestor(x::CachedArrays.HeapArray) = x
+
+function (f::ToCached{T,<:CachedArrays.CacheManager})(x...) where {T}
     return CachedArrays.CachedArray{T}(undef, f.manager, x; status = f.status)
 end
-function (f::ToCached)(::Type{T}, x...) where {T}
+function (f::ToCached{<:Any,<:CachedArrays.CacheManager})(::Type{T}, x...) where {T}
     return CachedArrays.CachedArray{T}(undef, f.manager, x; status = f.status)
+end
+
+function (f::ToCached{T,CachedArrays.HeapManager})(x...) where {T}
+    return CachedArrays.HeapArray{T}(undef, f.manager, x)
+end
+
+function (f::ToCached{<:Any,CachedArrays.HeapManager})(::Type{T}, x...) where {U,T}
+    return CachedArrays.HeapArray{T}(undef, f.manager, x)
 end
 
 #####
 ##### CachedArrays Compatility
 #####
+
+ConstructionBase.constructorof(::Type{<:OneDNN.Memory{L}}) where {L} = OneDNN.Memory{L}
+CachedArrays.@wrapper OneDNN.Memory array
+
+function ConstructionBase.constructorof(
+    ::Type{_EmbeddingTables.SimpleEmbedding{T,A,N}}
+) where {T,A,N}
+    return x -> _EmbeddingTables.SimpleEmbedding(x, Val(N))
+end
+CachedArrays.@wrapper _EmbeddingTables.SimpleEmbedding data
 
 # Accessibility hooks
 # Creating Model
@@ -73,28 +94,14 @@ end
     return __invoke__(f, __writable__(data))
 end
 
-@annotate function Base.fill!(A::CachedArray, x)
-    # Preserve the semantics of "fill!" by returning the filled object, but return
-    # the original object rather than the potentially newly created writable one.
-    __invoke__(__writable__(A), x)
-    return A
+# Grab the bias that is being returned and convert it to NotBusy.
+@annotate function Flux.create_bias(weights::CachedArray, bias::Bool, dims::Integer...)
+    return __release__(__invoke__(weights, bias, dims...))
 end
 
 const MaybeTranspose{T} = Union{T,LinearAlgebra.Transpose{<:Any,<:T}}
-@annotate function OneDNN.creatememory(x::MaybeTranspose{CachedArray}, desc)
-    return __invoke__(__readable__(x), desc)
-end
-
-@annotate function OneDNN.Dense(
-    weights::MaybeTranspose{CachedArray}, bias::CachedArray, args...
-)
-    return __invoke__(__readable__(weights), __readable__(bias), args...)
-end
-
-# Embedding Tables
-function CachedArrays.readable(x::SimpleEmbedding{T,A,N}) where {T,A<:CachedArray,N}
-    a = CachedArrays.readable(x.data)
-    return SimpleEmbedding(a, Val(N))
+@annotate function OneDNN.MemoryPtr(x::MaybeTranspose{<:UnreadableCachedArray}, desc)
+    return __recurse__(__readable__(x), desc)
 end
 
 @annotate function _EmbeddingTables.lookup!(
@@ -106,6 +113,18 @@ end
     return __recurse__(O, __readable__(A), I, style)
 end
 
+@annotate function Flux.update!(
+    x::_EmbeddingTables.SimpleEmbedding{<:Any,<:UnwritableCachedArray},
+    xbar::_EmbeddingTables.SparseEmbeddingUpdate{<:Any,<:AbstractVector},
+)
+    return __recurse__(__writable__(x), xbar)
+end
+
+# Since OneDNN kernels are long running, we can hook into the "access_pointer" API in order
+# to circumvent the need to change the wrapped array type.
+#
+# However, we need to clean up the `__readable__` call to avoid creating an entire new array
+# and instead just use a CachedArray callback to save on some allocations.
 @annotate function OneDNN.access_pointer(x::UnreadableCachedArray, offset, ::OneDNN.Reading)
     return pointer(__readable__(x), offset)
 end
@@ -115,10 +134,10 @@ end
 end
 
 # Capture memories coming out of OneDNN kernels and convert them to "NotBusy".
-function OneDNN.kernel_exit_hook(
+@annotate function OneDNN.kernel_exit_hook(
     x::OneDNN.Memory{L,T,N,CachedArray{T,N,S,M}}
 ) where {L,T,N,S,M}
-    return convert(OneDNN.Memory{L,T,N,CachedArray{T,N,CachedArrays.NotBusy,M}}, x)
+    return __release__(x)
 end
 
 @annotate function (dot::_Model.DotInteraction)(

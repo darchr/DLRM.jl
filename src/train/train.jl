@@ -182,8 +182,22 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     param_weights = params.weights
     grads_weights = grads.weights
 
-    Polyester.@batch per=thread for i in eachindex(param_weights, grads_weights)
-        Flux.update!(opt, param_weights[i], grads_weights[i])
+    param_embeddings = params.embeddings
+    grads_embeddings = grads.embeddings
+
+    @assert length(param_weights) == length(grads_weights)
+    @assert length(param_embeddings) == length(grads_embeddings)
+
+    # Merge embedding table updates with weight updates.
+    m = length(param_weights)
+    len = length(param_weights) + length(param_embeddings)
+    Polyester.@batch per=thread for i in Base.OneTo(len)
+        if i <= m
+            Flux.update!(opt, param_weights[i], grads_weights[i])
+        else
+            j = i - m
+            Flux.update!(opt, param_embeddings[j], grads_embeddings[j])
+        end
     end
 
     # Bias update
@@ -191,13 +205,6 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     grads_bias = grads.bias
     for i in eachindex(param_bias, grads_bias)
         Flux.update!(opt, param_bias[i], grads_bias[i])
-    end
-
-    # Embedding Update
-    param_embeddings = params.embeddings
-    grads_embeddings = grads.embeddings
-    Polyester.@batch per=thread for i in eachindex(param_embeddings, grads_embeddings)
-        Flux.update!(opt, param_embeddings[i], grads_embeddings[i])
     end
 end
 
