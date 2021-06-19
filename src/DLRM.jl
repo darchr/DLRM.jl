@@ -76,10 +76,13 @@ end
 ##### CachedArrays Compatility
 #####
 
-ConstructionBase.constructorof(::Type{<:OneDNN.Memory{L}}) where {L} = OneDNN.Memory{L}
+const UnwritableMemory = OneDNN.Memory{<:Any,<:Any,<:Any,<:UnwritableCachedArray}
+const UnreadableMemory = OneDNN.Memory{<:Any,<:Any,<:Any,<:UnreadableCachedArray}
+
+CachedArrays.constructorof(::Type{<:OneDNN.Memory{L}}) where {L} = OneDNN.Memory{L}
 CachedArrays.@wrapper OneDNN.Memory array
 
-function ConstructionBase.constructorof(
+function CachedArrays.constructorof(
     ::Type{_EmbeddingTables.SimpleEmbedding{T,A,N}}
 ) where {T,A,N}
     return x -> _EmbeddingTables.SimpleEmbedding(x, Val(N))
@@ -158,11 +161,7 @@ end
     return __recurse__(dot, __readable__(Δ), x...)
 end
 
-@annotate function Flux.update!(
-    o::Flux.Descent,
-    x::OneDNN.Memory{<:Any,<:Any,<:Any,<:UnwritableCachedArray},
-    y::OneDNN.Memory{<:Any,<:Any,<:Any,<:UnreadableCachedArray},
-)
+@annotate function Flux.update!(o::Flux.Descent, x::UnwritableMemory, y::UnreadableMemory)
     return __recurse__(o, __writable__(x), __readable__(y))
 end
 

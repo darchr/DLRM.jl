@@ -1,10 +1,13 @@
 module _Model
 
-using .._EmbeddingTables
-using .._Utils
 
 export DLRMModel, dlrm
 
+# internal deps
+using .._EmbeddingTables
+using .._Utils
+
+# deps
 using ChainRulesCore: ChainRulesCore
 using Flux: Flux
 using LoopVectorization: LoopVectorization
@@ -14,7 +17,8 @@ using Polyester: Polyester
 using ProgressMeter: ProgressMeter
 using Zygote: Zygote
 
-const TIMES = UInt[]
+# DocStringExtensions
+using DocStringExtensions
 
 include("interact.jl")
 

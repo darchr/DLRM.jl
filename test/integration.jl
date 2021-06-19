@@ -73,6 +73,7 @@
             iter = eachindex(original_prefixes, update_prefixes, grads.weights[start:end])
 
             for i in iter
+                println("Checking Top MLP: ", i)
                 # Weights
                 original = read(io["$(original_prefixes[i]).weight"])
                 update = read(io["$(update_prefixes[i]).weight"])
@@ -110,6 +111,7 @@
             iter = eachindex(original_prefixes, update_prefixes, grads.weights[1:(start - 1)])
 
             for i in iter
+                println("Checking Bottom MLP: ", i)
                 # Weights
                 original = read(io["$(original_prefixes[i]).weight"])
                 update = read(io["$(update_prefixes[i]).weight"])
@@ -143,6 +145,7 @@
             )
 
             for i in eachindex(original_names, update_names, model.embeddings)
+                println("Checking Embedding Tables: ", i)
                 original = read(io[original_names[i]])
                 reference = read(io[update_names[i]])
                 @test isapprox(reference, model.embeddings[i])
