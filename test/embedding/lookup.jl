@@ -85,27 +85,27 @@ end
         end
     end
 
-    @testset "Testing Reducing Simple" begin
-        for rows in nrows
-            base = rand(Float32, rows, ncols)
+    # @testset "Testing Reducing Simple" begin
+    #     for rows in nrows
+    #         base = rand(Float32, rows, ncols)
 
-            # For now, only the static case is fully implemented
-            A = copy(base)
-            B = EmbeddingTables.SimpleEmbedding(copy(base), Val(size(base,1)))
-            test_routine(A, B; lookups_per_output = 40)
-        end
-    end
+    #         # For now, only the static case is fully implemented
+    #         A = copy(base)
+    #         B = EmbeddingTables.SimpleEmbedding(copy(base), Val(size(base,1)))
+    #         test_routine(A, B; lookups_per_output = 40)
+    #     end
+    # end
 
-    @testset "Testing Reducing Split" begin
-        chunk_sizes = [10, 20, 30, 40, 50]
-        for rows in nrows
-            base = rand(Float32, rows, ncols)
+    # @testset "Testing Reducing Split" begin
+    #     chunk_sizes = [10, 20, 30, 40, 50]
+    #     for rows in nrows
+    #         base = rand(Float32, rows, ncols)
 
-            for cols_per_chunk in chunk_sizes
-                A = copy(base)
-                B = EmbeddingTables.SplitEmbedding(copy(base), cols_per_chunk)
-                test_routine(A, B; lookups_per_output = 40)
-            end
-        end
-    end
+    #         for cols_per_chunk in chunk_sizes
+    #             A = copy(base)
+    #             B = EmbeddingTables.SplitEmbedding(copy(base), cols_per_chunk)
+    #             test_routine(A, B; lookups_per_output = 40)
+    #         end
+    #     end
+    # end
 end

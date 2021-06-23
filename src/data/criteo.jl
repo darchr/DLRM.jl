@@ -452,7 +452,7 @@ function load_embeddings(file::HDF5.File, allocator = default_allocator)
         _data = read(file, name)
         data = allocator(eltype(_data), size(_data))
         data .= _data
-        return SimpleEmbedding(data)
+        return SimpleEmbedding(data, Val(size(data,1)))
     end
 end
 

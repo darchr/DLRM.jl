@@ -2,7 +2,6 @@ module _Train
 
 export bce_loss
 
-
 # stdlib
 using Statistics
 
@@ -29,7 +28,9 @@ include("utils.jl")
 
 bce_loss(ŷ, y) = Flux.Losses.binarycrossentropy(ŷ, y; agg = mean)
 
-function ChainRulesCore.rrule(::typeof(bce_loss), ŷ::AbstractVector{T}, y::AbstractVector{T}) where {T}
+function ChainRulesCore.rrule(
+    ::typeof(bce_loss), ŷ::AbstractVector{T}, y::AbstractVector{T}
+) where {T}
     z = bce_loss(ŷ, y)
     ly = length(y)
 
@@ -39,7 +40,8 @@ function ChainRulesCore.rrule(::typeof(bce_loss), ŷ::AbstractVector{T}, y::Abs
         ϵ = eps(T)
 
         # Because why not!
-        a = LoopVectorization.@turbo @. Δ * ((one(Δ) - y) / (one(Δ) - ŷ + ϵ) - (y / (ŷ + ϵ)))
+        a = LoopVectorization.@turbo @. Δ *
+                                        ((one(Δ) - y) / (one(Δ) - ŷ + ϵ) - (y / (ŷ + ϵ)))
         b = LoopVectorization.@turbo @. Δ * (log(one(Δ) - ŷ + ϵ) - log(ŷ + ϵ))
         return (ChainRulesCore.NoTangent(), a, b)
     end
@@ -60,7 +62,7 @@ function __cb(loss::LossWrapper)
     return donothing
 end
 
-wrap_loss(loss_fn; kw...) = LossWrapper(loss_fn, (;kw...,))
+wrap_loss(loss_fn; kw...) = LossWrapper(loss_fn, (; kw...))
 
 function (wrapper::LossWrapper)(model, labels, args...)
     out = model(args...; wrapper.kw...)
@@ -84,15 +86,20 @@ end
 
 struct DLRMParams{W,B,E}
     weights::Vector{W}
+    # The weights and weight gradients end up with different layouts.
+    # Here, we cache the indices from the grads to the weights to make the updating
+    # process faster.
+    weight_index_translations::Vector{Tuple{Vector{Int},Vector{Int}}}
     bias::Vector{B}
     embeddings::Vector{E}
 end
 
 function DLRMParams(model)
     W = typeof(first(model.bottom_mlp).weights)
+    WIT = Tuple{Vector{Int},Vector{Int}}[]
     B = typeof(first(model.bottom_mlp).bias)
     E = eltype(model.embeddings)
-    params = DLRMParams(W[], B[], E[])
+    params = DLRMParams(W[], WIT, B[], E[])
     gather!(params, model)
     return params
 end
@@ -111,7 +118,7 @@ struct DLRMGrads{T,U}
     embeddings::Vector{SparseEmbeddingUpdate}
 end
 
-function DLRMGrads(model #=::DLRMModel=#)
+function DLRMGrads(model) #=::DLRMModel=#
     T = typeof(first(model.bottom_mlp).weights)
     U = typeof(first(model.bottom_mlp).bias)
     return DLRMGrads(T[], U[], SparseEmbeddingUpdate[])
@@ -188,12 +195,26 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     @assert length(param_weights) == length(grads_weights)
     @assert length(param_embeddings) == length(grads_embeddings)
 
+    # Check if we need to populate the weight index translation tables
+    if isempty(params.weight_index_translations)
+        populate_translations!(params, grads)
+    end
+
     # Merge embedding table updates with weight updates.
     m = length(param_weights)
     len = length(param_weights) + length(param_embeddings)
+    index_translation = params.weight_index_translations
+
     Polyester.@batch per=thread for i in Base.OneTo(len)
+    #for i in Base.OneTo(len)
         if i <= m
-            Flux.update!(opt, param_weights[i], grads_weights[i])
+            Flux.update!(
+                opt,
+                param_weights[i],
+                index_translation[i][1],
+                grads_weights[i],
+                index_translation[i][2],
+            )
         else
             j = i - m
             Flux.update!(opt, param_embeddings[j], grads_embeddings[j])
@@ -201,11 +222,24 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     end
 
     # Bias update
+    # Single thread since this is super quick anyways.
     param_bias = params.bias
     grads_bias = grads.bias
     for i in eachindex(param_bias, grads_bias)
         Flux.update!(opt, param_bias[i], grads_bias[i])
     end
+end
+
+function populate_translations!(params, grads)
+    empty!(params.weight_index_translations)
+    for (param, grad) in zip(params.weights, grads.weights)
+        @assert isa(param, OneDNN.Memory)
+        @assert isa(grad, OneDNN.Memory)
+        param_indices = OneDNN.generate_linear_indices(param)
+        grad_indices = OneDNN.generate_linear_indices(grad)
+        push!(params.weight_index_translations, (param_indices, grad_indices))
+    end
+    return nothing
 end
 
 end # module

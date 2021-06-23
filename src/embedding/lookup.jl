@@ -14,13 +14,20 @@ function lookup(A::AbstractMatrix, II::MI)
 end
 
 # A sparse updater for embedding tables.
-struct SparseEmbeddingUpdate{A<:AbstractMatrix,I<:AbstractArray}
+struct SparseEmbeddingUpdate{S<:AbstractLookupType,A<:AbstractMatrix,I<:AbstractArray}
     delta::A
     indices::I
+    translation::Dict{Int,Int}
+
+    function SparseEmbeddingUpdate{S}(
+        delta::A, indices::I, translation = Dict{Int,Int}()
+    ) where {S,A,I}
+        return new{S,A,I}(delta, indices, translation)
+    end
 end
 
 function uncompress(
-    x::SparseEmbeddingUpdate{<:Any,<:AbstractVector}, ncols = maximum(x.indices)
+    x::SparseEmbeddingUpdate{<:Any,<:Any,<:AbstractVector}, ncols = maximum(x.indices)
 )
     O = similar(x.delta, size(x.delta, 1), ncols)
     O .= zero(eltype(O))
@@ -32,7 +39,7 @@ function uncompress(
 end
 
 function uncompress(
-    x::SparseEmbeddingUpdate{<:Any,<:AbstractMatrix}, ncols = maximum(x.indices)
+    x::SparseEmbeddingUpdate{<:Any,<:Any,<:AbstractMatrix}, ncols = maximum(x.indices)
 )
     O = similar(x.delta, size(x.delta, 1), ncols)
     O .= zero(eltype(O))
@@ -45,22 +52,61 @@ function uncompress(
     return O
 end
 
+# Compress all updates for each column in place.
+function crunch!(x::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector}) where {N,A}
+    head = 1
+    # Unpack things ...
+    delta = x.delta
+    indices = x.indices
+    translation = x.translation
+    empty!(translation)
+
+    for i in Base.OneTo(size(delta, 2))
+        target_column = indices[i]
+        accumulation_column = get!(translation, target_column, head)
+        if accumulation_column == head
+            # Move this column to the head pointer and update the `indices` array
+            # appropriately.
+            # Since we're moving sequentially, we don't have to worry about destroying
+            # data.
+            _dst = columnview(delta, head)
+            _src = columnview(delta, i)
+            for i in Base.OneTo(N)
+                _dst[i] = _src[i]
+            end
+
+            indices[head] = target_column
+            head += 1
+            continue
+        end
+
+        # TODO: accelerate
+        #columnview(delta, accumulation_column) .+= columnview(delta, i)
+        _dst = columnview(delta, accumulation_column)
+        _src = columnview(delta, i)
+        for i in Base.OneTo(N)
+            _dst[i] += _src[i]
+        end
+    end
+    return head - 1
+end
+
 #####
 ##### Custom Implementation
 #####
 
 #-- No reduction function
-function lookup(A::AbstractEmbeddingTable{T}, I::VI) where {T}
+function lookup(A::AbstractEmbeddingTable{S,T}, I::VI) where {S,T}
     nrows = featuresize(A)
     O = similar(example(A), T, nrows, length(I))
 
     # dispatch based on Static or Dynamic lookup type
-    lookup!(O, A, I, lookuptype(A))
+    lookup!(O, A, I)
     return O
 end
 
 # fallback dynamic implementation
-function lookup!(O, A::AbstractEmbeddingTable{T}, I::VI, ::Dynamic) where {T}
+function lookup!(O, A::AbstractEmbeddingTable{Dynamic,T}, I::VI) where {T}
     nrows = featuresize(A)
     for (col, i) in enumerate(I)
         @inbounds ptrA = columnpointer(A, i)
@@ -75,16 +121,16 @@ function lookup(A::AbstractEmbeddingTable{T}, II::MI) where {F,T}
     O = similar(example(A), T, nrows, size(II, 2))
 
     # simd generated function
-    lookup!(O, A, II, lookuptype(A))
+    lookup!(O, A, II)
     return O
 end
 
 #-- Pullbacks
-function ChainRulesCore.rrule(::typeof(lookup), A::AbstractEmbeddingTable, I)
+function ChainRulesCore.rrule(::typeof(lookup), A::AbstractEmbeddingTable{S}, I) where {S}
     function lookup_pullback(Δ)
         return (
             ChainRulesCore.NoTangent(),
-            SparseEmbeddingUpdate(Δ, I),
+            SparseEmbeddingUpdate{S}(Δ, I),
             ChainRulesCore.NoTangent(),
         )
     end
@@ -109,14 +155,14 @@ end
 function ChainRulesCore.rrule(
     ::typeof(maplookup),
     strategy::AbstractExecutionStrategy,
-    A::Vector{<:AbstractEmbeddingTable},
+    A::Vector{<:AbstractEmbeddingTable{S}},
     I,
-)
+) where {S}
     function maplookup_pullback(Δs)
         return (
             ChainRulesCore.NoTangent(),
             ChainRulesCore.NoTangent(),
-            ChainRulesCore.@thunk(map(SparseEmbeddingUpdate, Δs, _colwrap(I))),
+            ChainRulesCore.@thunk(map(SparseEmbeddingUpdate{S}, Δs, _colwrap(I))),
             ChainRulesCore.NoTangent(),
         )
     end
@@ -146,7 +192,7 @@ function maplookup(::SimpleParallelStrategy, x::Vector{<:AbstractEmbeddingTable}
     out = Vector{typeof(example(x[1]))}(undef, length(x))
     I = _colwrap(_I)
     Threads.@threads for i in eachindex(x, I)
-    #Polyester.@batch for i in eachindex(x, I)
+        #Polyester.@batch for i in eachindex(x, I)
         out[i] = lookup(x[i], I[i])
     end
     return out
@@ -186,7 +232,7 @@ function maplookup(
     pushfirst!(rows_sum, 0)
 
     #Threads.@threads for i in eachindex(x, I)
-    Polyester.@batch per=thread for i in eachindex(x)
+    Polyester.@batch per = thread for i in eachindex(x)
         start = 1 + offset + rows_sum[i]
         stop = offset + rows_sum[i + 1]
 
@@ -194,7 +240,7 @@ function maplookup(
         O = view(data, start:stop, Base.OneTo(batchsize))
         A = x[i]
 
-        lookup!(O, A, I[i], lookuptype(A))
+        lookup!(O, A, I[i])
     end
     return data
 end
@@ -202,14 +248,14 @@ end
 function ChainRulesCore.rrule(
     ::typeof(maplookup),
     strategy::PreallocationStrategy,
-    A::Vector{<:AbstractEmbeddingTable},
+    A::Vector{<:AbstractEmbeddingTable{S}},
     _I,
-)
+) where {S}
     I = _colwrap(_I)
     data = maplookup(strategy, A, I)
     function maplookup_pullback(Δ)
         f = Slicer(strategy.prependrows + 1, 1, Δ)
-        δs = map((y, x) -> SparseEmbeddingUpdate(f(featuresize(y)), x), A, I)
+        δs = map((y, x) -> SparseEmbeddingUpdate{S}(f(featuresize(y)), x), A, I)
 
         return (
             ChainRulesCore.NoTangent(),

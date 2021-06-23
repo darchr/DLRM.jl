@@ -18,34 +18,34 @@
     #    be.
     #
     # 3. Run both of the updates and see if we get the same result.
-    @testset "Static-Reduction Update" begin
-        featuresizes = [16,32,48,64,128,256]
-        for featuresize in featuresizes
-            ncols = 100
-            nlookups = 40
-            batchsize = 320
+    # @testset "Static-Reduction Update" begin
+    #     featuresizes = [16,32,48,64,128,256]
+    #     for featuresize in featuresizes
+    #         ncols = 100
+    #         nlookups = 40
+    #         batchsize = 320
 
-            base = zeros(Float32, featuresize, ncols)
+    #         base = zeros(Float32, featuresize, ncols)
 
-            # Construct dynamic and static tables
-            dynamic = EmbeddingTables.SimpleEmbedding(copy(base))
-            static = EmbeddingTables.SimpleEmbedding(copy(base), Val(featuresize))
-            split_static = EmbeddingTables.SplitEmbedding(copy(base), 10)
+    #         # Construct dynamic and static tables
+    #         dynamic = EmbeddingTables.SimpleEmbedding(copy(base))
+    #         static = EmbeddingTables.SimpleEmbedding(copy(base), Val(featuresize))
+    #         split_static = EmbeddingTables.SplitEmbedding(copy(base), 10)
 
-            # Manually construct an update
-            indices = rand(1:ncols, nlookups, batchsize)
-            delta = randn(Float32, featuresize, batchsize)
-            update = EmbeddingTables.SparseEmbeddingUpdate(delta, indices)
+    #         # Manually construct an update
+    #         indices = rand(1:ncols, nlookups, batchsize)
+    #         delta = randn(Float32, featuresize, batchsize)
+    #         update = EmbeddingTables.SparseEmbeddingUpdate(delta, indices)
 
-            # Apply the update to the dynamic and static tables
-            Flux.Optimise.update!(dynamic, update)
-            Flux.Optimise.update!(static, update)
-            Flux.Optimise.update!(split_static, update)
+    #         # Apply the update to the dynamic and static tables
+    #         Flux.Optimise.update!(dynamic, update)
+    #         Flux.Optimise.update!(static, update)
+    #         Flux.Optimise.update!(split_static, update)
 
-            @test isapprox(dynamic, static)
-            @test isapprox(static, split_static)
-        end
-    end
+    #         @test isapprox(dynamic, static)
+    #         @test isapprox(static, split_static)
+    #     end
+    # end
 end
 
 #####
@@ -100,15 +100,37 @@ function update_routine(baseline, new, iters; lookups_per_output = 1)
             # Find all the mismatching columns.
             mismatch_cols = findall(eachcol(baseline) .!= eachcol(new))
             @show mismatch_cols
-            printstyled(stdout, "Baseline\n"; color = :cyan)
-            display(baseline)
-            printstyled(stdout, "New\n"; color = :cyan)
-            display(new)
-            printstyled(stdout, "Difference\n"; color = :cyan)
-            display(!isapprox.(new, baseline))
+            # printstyled(stdout, "Baseline\n"; color = :cyan)
+            # display(baseline)
+            # printstyled(stdout, "New\n"; color = :cyan)
+            # display(new)
+            # printstyled(stdout, "Difference\n"; color = :cyan)
+            # display(!isapprox.(new, baseline))
             println()
         end
     end
+end
+
+@testset "Testing Crunch" begin
+    EmbeddingTables = DLRM._EmbeddingTables
+
+    delta = rand(Float32, 16, 5)
+    delta_old = copy(delta)
+
+    indices = [4,1,4,2,1]
+    # Idiot check
+    @test length(indices) == size(delta, 2)
+
+    update = EmbeddingTables.SparseEmbeddingUpdate{EmbeddingTables.Static{size(delta,1)}}(
+        delta,
+        indices,
+    )
+    newlength = EmbeddingTables.crunch!(update)
+    @test newlength == length(unique(indices))
+    @test view(update.indices, 1:newlength)  == unique(indices)
+    @test view(delta, :, 1) == delta_old[:,1] + delta_old[:,3]
+    @test view(delta, :, 2) == delta_old[:,2] + delta_old[:,5]
+    @test view(delta, :, 3) == delta_old[:,4]
 end
 
 @testset "Testing Update" begin
@@ -120,11 +142,11 @@ end
 
     @testset "Simple" begin
         for rows in nrows
-            # Dynamic
-            base = randn(Float32, rows, ncols)
-            A = copy(base)
-            B = EmbeddingTables.SimpleEmbedding(copy(base))
-            update_routine(A, B, numtests)
+            # # Dynamic
+            # base = randn(Float32, rows, ncols)
+            # A = copy(base)
+            # B = EmbeddingTables.SimpleEmbedding(copy(base))
+            # update_routine(A, B, numtests)
 
             # Static
             base = randn(Float32, rows, ncols)
@@ -146,24 +168,24 @@ end
         end
     end
 
-    @testset "Reducing Simple" begin
-        for rows in nrows
-            base = randn(Float32, rows, ncols)
-            A = copy(base)
-            B = EmbeddingTables.SimpleEmbedding(copy(base), Val(size(base,1)))
-            update_routine(A, B, numtests; lookups_per_output = 5)
-        end
-    end
+    # @testset "Reducing Simple" begin
+    #     for rows in nrows
+    #         base = randn(Float32, rows, ncols)
+    #         A = copy(base)
+    #         B = EmbeddingTables.SimpleEmbedding(copy(base), Val(size(base,1)))
+    #         update_routine(A, B, numtests; lookups_per_output = 5)
+    #     end
+    # end
 
-    @testset "Reducing Split" begin
-        chunk_sizes = [10, 20, 30, 40, 50]
-        for rows in nrows
-            base = randn(Float32, rows, ncols)
-            for cols_per_chunk in chunk_sizes
-                A = copy(base)
-                B = EmbeddingTables.SplitEmbedding(copy(base), cols_per_chunk)
-                update_routine(A, B, numtests; lookups_per_output = 5)
-            end
-        end
-    end
+    # @testset "Reducing Split" begin
+    #     chunk_sizes = [10, 20, 30, 40, 50]
+    #     for rows in nrows
+    #         base = randn(Float32, rows, ncols)
+    #         for cols_per_chunk in chunk_sizes
+    #             A = copy(base)
+    #             B = EmbeddingTables.SplitEmbedding(copy(base), cols_per_chunk)
+    #             update_routine(A, B, numtests; lookups_per_output = 5)
+    #         end
+    #     end
+    # end
 end

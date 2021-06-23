@@ -221,7 +221,7 @@ end
 ##### Optimized Concatenation
 #####
 
-const MemoryAround{A} = OneDNN.Memory{<:Any,<:Any,<:Any,A}
+const MemoryAround{A} = OneDNN.Memory{<:Any,<:Any,A}
 
 """
 $(TYPEDSIGNATURES)
@@ -504,7 +504,7 @@ function batched_transpose(x::AbstractArray{T,3}) where {T}
     return PermutedDimsArray{T,3,(2, 1, 3),(2, 1, 3),typeof(x)}(x)
 end
 
-batched_transpose(x::OneDNN.Memory{OneDNN.Opaque,<:Any,3}) = permutedims(x, (2, 1, 3))
+batched_transpose(x::OneDNN.Memory{<:Any,3}) = permutedims(x, (2, 1, 3))
 
 function self_batched_mul(x::OneDNN.Memory, xt::OneDNN.Memory)
     y = OneDNN.matmul(x, xt)

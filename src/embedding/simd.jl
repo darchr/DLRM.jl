@@ -4,20 +4,20 @@ const VECTOR_WIDTH_BYTES = 64
 
 # Lookup - nonreducing
 @generated function lookup!(
-    O, A::AbstractEmbeddingTable{T}, I::AbstractVector{<:Integer}, ::Static{N}
+    dst, src::AbstractEmbeddingTable{Static{N}, T}, indices::AbstractVector{<:Integer}
 ) where {T,N}
-
-    return emit_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
+    return emit_lookup_2(Float32, N)
+#    return emit_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
 end
 
-# Lookup - reduction
-@generated function lookup!(
-    O, A::AbstractEmbeddingTable{T}, II::AbstractMatrix{<:Integer}, ::Static{N}
-) where {T,N}
-    return emit_reducing_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
-end
+# # Lookup - reduction
+# @generated function lookup!(
+#     O, A::AbstractEmbeddingTable{T}, II::AbstractMatrix{<:Integer}, ::Static{N}
+# ) where {T,N}
+#     return emit_reducing_lookup(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
+# end
 
-@generated function __update!(x::AbstractEmbeddingTable{T}, xbar, ::Static{N}) where {T,N}
+@generated function __update!(x::AbstractEmbeddingTable{Static{N},T}, xbar) where {T,N}
     return emit_update(T, div(VECTOR_WIDTH_BYTES, sizeof(T)), N)
 end
 
@@ -291,5 +291,54 @@ end
 function emitif(x::Integer, y::Integer, ex)
     @assert x >= y
     return ex
+end
+
+#####
+##### version 2
+#####
+
+function emit_lookup_2(::Type{T}, numelements::Integer) where {T}
+    return quote
+        cached_aligned_error(dst)
+        f = identity
+        for (dst_col, src_col) in enumerate(indices)
+            src_ptr = columnpointer(src, src_col)
+            dst_ptr = columnpointer(dst, dst_col)
+            $(generate_moveto(T, numelements, true))
+        end
+        sfence()
+    end
+end
+
+function generate_moveto(::Type{T}, numelements::Integer, store_nontemporal::Bool) where {T}
+    # For now, only support optimized movement if the feature size is a "nice" multiple
+    # of the AVX vector size.
+    bytes_to_move = sizeof(T) * numelements
+    @assert iszero(mod(bytes_to_move, VECTOR_WIDTH_BYTES))
+
+    # How many instructions do we need to emit?
+    num_instructions = div(bytes_to_move, VECTOR_WIDTH_BYTES)
+    vecsize = div(VECTOR_WIDTH_BYTES, sizeof(T))
+    vectype = SIMD.Vec{vecsize,T}
+
+    # Rely on LLVM to perform the constant propagation and loop unrolling if it thinks
+    # it will be useful.
+    var = gensym("x")
+    return quote
+        for i in Base.OneTo($num_instructions)
+            # Apply an arbitrary function "f".
+            # Usually, this will be the identity, but might as well add it in so we
+            # can support reductions in the future.
+            j = i - 1
+            $var = f(SIMD.vload($vectype, src_ptr + sizeof($vectype) * j))
+            SIMD.vstore(
+                $var,
+                dst_ptr + sizeof($vectype) * j,
+                nothing,
+                Val($store_nontemporal),
+                Val($store_nontemporal),
+            )
+        end
+    end
 end
 

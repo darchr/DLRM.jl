@@ -5,14 +5,16 @@
 ### Non-reduction case.
 function Flux.Optimise.update!(
         x::AbstractEmbeddingTable,
-        xbar::SparseEmbeddingUpdate{A,I}
+        xbar::SparseEmbeddingUpdate{<:Any,A,I},
+        numcols::Integer
     ) where {A,I <: AbstractVector}
-
-    for (col, update) in zip(xbar.indices, eachcol(xbar.delta))
+    for (src_col, dst_col) in enumerate(view(xbar.indices, Base.OneTo(numcols)))
         # Update on a column-by-column basis
-        v = columnview(x, col)
+        update = columnview(xbar.delta, src_col)
+        v = columnview(x, dst_col)
         v .-= update
     end
+    return nothing
 end
 
 ### Reducing Case
@@ -23,14 +25,14 @@ end
 # The static case lives in `simd.jl`.
 function Flux.Optimise.update!(
         x::AbstractEmbeddingTable,
-        xbar::SparseEmbeddingUpdate{A,I}
+        xbar::SparseEmbeddingUpdate{<:Any,A,I}
     ) where {A,I <: AbstractMatrix}
 
-    return __update!(x, xbar, lookuptype(x))
+    return __update!(x, xbar)
 end
 
 # Dynamic update case
-function __update!(x::AbstractEmbeddingTable, xbar, ::Dynamic)
+function __update!(x::AbstractEmbeddingTable, xbar)
     for col in 1:size(xbar.indices, 2)
         for row in 1:size(xbar.indices, 1)
             @inbounds slice = xbar.indices[row, col]
@@ -51,12 +53,13 @@ end
 # For now, just hijack a higher level of the Flux update chain.
 # TODO: lazy wrapper for the learning rate to apply in `__update!`.
 function Flux.Optimise.update!(opt, x, xbar::SparseEmbeddingUpdate)
-    return Flux.update!(x, Flux.Optimise.apply!(opt, x, xbar))
+    return Flux.update!(x, Flux.Optimise.apply!(opt, x, xbar)...)
 end
 
 function Flux.Optimise.apply!(opt::Flux.Descent, x, xbar::SparseEmbeddingUpdate)
     eta = convert(eltype(xbar.delta), opt.eta)
-    xbar.delta .*= eta
-    return xbar
+    newcols = crunch!(xbar)
+    view(xbar.delta, :, Base.OneTo(newcols)) .*= eta
+    return xbar, newcols
 end
 

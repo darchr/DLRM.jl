@@ -3,7 +3,6 @@ module _EmbeddingTables
 export SimpleEmbedding, lookup, maplookup, SparseEmbeddingUpdate
 export DefaultStrategy, SimpleParallelStrategy, PreallocationStrategy
 
-
 using .._Utils
 
 # For defining sparse adjoints.
@@ -40,13 +39,15 @@ struct Dynamic <: AbstractLookupType end
 struct Static{N} <: AbstractLookupType end
 
 # Super type for Embedding Tables
-abstract type AbstractEmbeddingTable{T} <: AbstractArray{T,2} end
+abstract type AbstractEmbeddingTable{S<:AbstractLookupType,T} <: AbstractArray{T,2} end
 
 # Some generic interface implementations for AbstractEmbeddingTables
 Base.IndexStyle(::AbstractEmbeddingTable) = Base.IndexLinear()
 
 featuresize(A::AbstractMatrix) = size(A, 1)
-lookuptype(::AbstractEmbeddingTable) = Dynamic()
+featuresize(A::AbstractEmbeddingTable{Static{N}}) where {N} = N
+lookuptype(::AbstractEmbeddingTable{S}) where {S} = S()
+
 function columnpointer(A::AbstractMatrix{T}, i::Integer) where {T}
     return pointer(A) + strides(A)[2] * sizeof(T) * (i-1)
 end

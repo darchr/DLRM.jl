@@ -1,7 +1,7 @@
 # The split embedding table shards data into chunks.
 # Each chunk is stored as a matrix.
 # Parameter `F` is the feature size - used to generate high-performance lookups.
-struct SplitEmbedding{T,A <: AbstractMatrix{T},F} <: AbstractEmbeddingTable{T}
+struct SplitEmbedding{S,T,A <: AbstractMatrix{T}} <: AbstractEmbeddingTable{S,T}
     data::Vector{A}
     # All sub matrices (except for the last) should be the same size.
     # For the last, we provide some wiggle room to allow for non-perfectly sized
@@ -23,7 +23,7 @@ struct SplitEmbedding{T,A <: AbstractMatrix{T},F} <: AbstractEmbeddingTable{T}
         end
 
         matrixsize = (size(A,1),cols_per_shard)
-        return new{eltype(A), typeof(A), size(A,1)}(
+        return new{Static{size(A,1)},eltype(A), typeof(A)}(
             data,
             matrixsize,
         )
@@ -68,8 +68,8 @@ end
 ##### EmbeddingTables Interface
 #####
 
-featuresize(::SplitEmbedding{T,A,F}) where {T,A,F} = F
-lookuptype(::SplitEmbedding{T,A,F}) where {T,A,F} = Static{F}()
+# featuresize(::SplitEmbedding{T,A,F}) where {T,A,F} = F
+# lookuptype(::SplitEmbedding{T,A,F}) where {T,A,F} = Static{F}()
 example(A::SplitEmbedding) = first(A.data)
 
 Base.@propagate_inbounds function columnpointer(A::SplitEmbedding, i::Integer)

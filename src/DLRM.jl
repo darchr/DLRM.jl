@@ -76,15 +76,15 @@ end
 ##### CachedArrays Compatility
 #####
 
-const UnwritableMemory = OneDNN.Memory{<:Any,<:Any,<:Any,<:UnwritableCachedArray}
-const UnreadableMemory = OneDNN.Memory{<:Any,<:Any,<:Any,<:UnreadableCachedArray}
+const UnwritableMemory = OneDNN.Memory{<:Any,<:Any,<:UnwritableCachedArray}
+const UnreadableMemory = OneDNN.Memory{<:Any,<:Any,<:UnreadableCachedArray}
 
-CachedArrays.constructorof(::Type{<:OneDNN.Memory{L}}) where {L} = OneDNN.Memory{L}
+#CachedArrays.constructorof(::Type{<:OneDNN.Memory}) = OneDNN.Memory
 CachedArrays.@wrapper OneDNN.Memory array
 
 function CachedArrays.constructorof(
-    ::Type{_EmbeddingTables.SimpleEmbedding{T,A,N}}
-) where {T,A,N}
+    ::Type{_EmbeddingTables.SimpleEmbedding{_EmbeddingTables.Static{N},T,A}}
+) where {N,T,A}
     return x -> _EmbeddingTables.SimpleEmbedding(x, Val(N))
 end
 CachedArrays.@wrapper _EmbeddingTables.SimpleEmbedding data
@@ -93,8 +93,8 @@ CachedArrays.@wrapper _EmbeddingTables.SimpleEmbedding data
 # Creating Model
 #
 # Make the destination writable for initialization.
-@annotate function _Model.multithread_init(f, data::CachedArray)
-    return __invoke__(f, __writable__(data))
+@annotate function _Model.multithread_init(f, data::UnwritableCachedArray)
+    return __recurse__(f, __writable__(data))
 end
 
 # Grab the bias that is being returned and convert it to NotBusy.
@@ -109,18 +109,18 @@ end
 
 @annotate function _EmbeddingTables.lookup!(
     O,
-    A::SimpleEmbedding{T,<:UnreadableCachedArray},
+    A::SimpleEmbedding{S,T,<:UnreadableCachedArray},
     I::AbstractVector{<:Integer},
-    style::_EmbeddingTables.Static{N},
-) where {T,N}
-    return __recurse__(O, __readable__(A), I, style)
+) where {S,T,N}
+    return __recurse__(O, __readable__(A), I)
 end
 
 @annotate function Flux.update!(
-    x::_EmbeddingTables.SimpleEmbedding{<:Any,<:UnwritableCachedArray},
-    xbar::_EmbeddingTables.SparseEmbeddingUpdate{<:Any,<:AbstractVector},
+    x::_EmbeddingTables.SimpleEmbedding{<:Any,<:Any,<:UnwritableCachedArray},
+    xbar::_EmbeddingTables.SparseEmbeddingUpdate{<:Any,<:Any,<:AbstractVector},
+    numcols::Integer
 )
-    return __recurse__(__writable__(x), xbar)
+    return __recurse__(__writable__(x), xbar, numcols)
 end
 
 # Since OneDNN kernels are long running, we can hook into the "access_pointer" API in order
@@ -138,8 +138,8 @@ end
 
 # Capture memories coming out of OneDNN kernels and convert them to "NotBusy".
 @annotate function OneDNN.kernel_exit_hook(
-    x::OneDNN.Memory{L,T,N,CachedArray{T,N,S,M}}
-) where {L,T,N,S,M}
+    x::OneDNN.Memory{N,CachedArray{T,N,S,M}}
+) where {T,N,S,M}
     return __release__(x)
 end
 
@@ -161,8 +161,13 @@ end
     return __recurse__(dot, __readable__(Δ), x...)
 end
 
+# Two update flavors.
 @annotate function Flux.update!(o::Flux.Descent, x::UnwritableMemory, y::UnreadableMemory)
     return __recurse__(o, __writable__(x), __readable__(y))
+end
+
+@annotate function Flux.update!(o::Flux.Descent, x::UnwritableMemory, ix, y::UnreadableMemory, iy)
+    return __recurse__(o, __writable__(x), ix, __readable__(y), iy)
 end
 
 end # module
