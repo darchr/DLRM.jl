@@ -52,13 +52,19 @@ end
 
 # For now, just hijack a higher level of the Flux update chain.
 # TODO: lazy wrapper for the learning rate to apply in `__update!`.
-function Flux.Optimise.update!(opt, x, xbar::SparseEmbeddingUpdate)
-    return Flux.update!(x, Flux.Optimise.apply!(opt, x, xbar)...)
+function Flux.Optimise.update!(opt, x, xbar::SparseEmbeddingUpdate, args...)
+    return Flux.update!(x, Flux.Optimise.apply!(opt, x, xbar, args...)...)
 end
 
-function Flux.Optimise.apply!(opt::Flux.Descent, x, xbar::SparseEmbeddingUpdate)
+function Flux.Optimise.apply!(
+        opt::Flux.Descent,
+        x,
+        xbar::SparseEmbeddingUpdate,
+        translation = Dict{Int,Int}()
+    )
+
     eta = convert(eltype(xbar.delta), opt.eta)
-    newcols = crunch!(xbar)
+    newcols = crunch!(xbar, translation)
     view(xbar.delta, :, Base.OneTo(newcols)) .*= eta
     return xbar, newcols
 end

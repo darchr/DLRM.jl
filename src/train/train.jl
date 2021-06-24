@@ -91,15 +91,19 @@ struct DLRMParams{W,B,E}
     # process faster.
     weight_index_translations::Vector{Tuple{Vector{Int},Vector{Int}}}
     bias::Vector{B}
+
+    # Embedding tables and pre-allocated dictionaries for doing the pre-compression
+    # before embedding table update.
     embeddings::Vector{E}
+    crunch_translations::Vector{Dict{Int,Int}}
 end
 
 function DLRMParams(model)
     W = typeof(first(model.bottom_mlp).weights)
-    WIT = Tuple{Vector{Int},Vector{Int}}[]
+    WIT = Tuple{Vector{Int},Vector{Int}}
     B = typeof(first(model.bottom_mlp).bias)
     E = eltype(model.embeddings)
-    params = DLRMParams(W[], WIT, B[], E[])
+    params = DLRMParams(W[], WIT[], B[], E[], Dict{Int,Int}[])
     gather!(params, model)
     return params
 end
@@ -200,13 +204,20 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
         populate_translations!(params, grads)
     end
 
+    crunch_translations = params.crunch_translations
+    if isempty(crunch_translations)
+        for _ in eachindex(param_embeddings)
+            push!(crunch_translations, eltype(crunch_translations)())
+        end
+    end
+
     # Merge embedding table updates with weight updates.
     m = length(param_weights)
     len = length(param_weights) + length(param_embeddings)
     index_translation = params.weight_index_translations
 
-    Polyester.@batch per=thread for i in Base.OneTo(len)
-    #for i in Base.OneTo(len)
+    Polyester.@batch per = thread for i in Base.OneTo(len)
+        #for i in Base.OneTo(len)
         if i <= m
             Flux.update!(
                 opt,
@@ -217,7 +228,9 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
             )
         else
             j = i - m
-            Flux.update!(opt, param_embeddings[j], grads_embeddings[j])
+            Flux.update!(
+                opt, param_embeddings[j], grads_embeddings[j], crunch_translations[j]
+            )
         end
     end
 

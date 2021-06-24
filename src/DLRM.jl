@@ -76,12 +76,10 @@ end
 ##### CachedArrays Compatility
 #####
 
-const UnwritableMemory = OneDNN.Memory{<:Any,<:Any,<:UnwritableCachedArray}
-const UnreadableMemory = OneDNN.Memory{<:Any,<:Any,<:UnreadableCachedArray}
+const UnwritableMemory = MemoryAround{UnwritableCachedArray}
+const UnreadableMemory = MemoryAround{UnreadableCachedArray}
 
-#CachedArrays.constructorof(::Type{<:OneDNN.Memory}) = OneDNN.Memory
 CachedArrays.@wrapper OneDNN.Memory array
-
 function CachedArrays.constructorof(
     ::Type{_EmbeddingTables.SimpleEmbedding{_EmbeddingTables.Static{N},T,A}}
 ) where {N,T,A}
@@ -137,9 +135,7 @@ end
 end
 
 # Capture memories coming out of OneDNN kernels and convert them to "NotBusy".
-@annotate function OneDNN.kernel_exit_hook(
-    x::OneDNN.Memory{N,CachedArray{T,N,S,M}}
-) where {T,N,S,M}
+@annotate function OneDNN.kernel_exit_hook(x::MemoryAround{CachedArray})
     return __release__(x)
 end
 

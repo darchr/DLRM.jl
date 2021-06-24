@@ -5,15 +5,14 @@ export DefaultStrategy, SimpleParallelStrategy, PreallocationStrategy
 
 using .._Utils
 
-# For defining sparse adjoints.
 import ChainRulesCore
-using Flux
+import Flux
 import Polyester
-using Zygote
+import SIMD
+import UnPack: @unpack
+import Zygote
 
-# To vectorize lookup operations
-using SIMD
-using MacroTools
+#using MacroTools
 
 const TIMES = UInt[]
 

@@ -221,7 +221,6 @@ end
 ##### Optimized Concatenation
 #####
 
-const MemoryAround{A} = OneDNN.Memory{<:Any,<:Any,A}
 
 """
 $(TYPEDSIGNATURES)

@@ -13,16 +13,17 @@ function lookup(A::AbstractMatrix, II::MI)
     return hcat(_b...)
 end
 
+#####
+##### Embedding Updates
+#####
+
 # A sparse updater for embedding tables.
 struct SparseEmbeddingUpdate{S<:AbstractLookupType,A<:AbstractMatrix,I<:AbstractArray}
     delta::A
     indices::I
-    translation::Dict{Int,Int}
 
-    function SparseEmbeddingUpdate{S}(
-        delta::A, indices::I, translation = Dict{Int,Int}()
-    ) where {S,A,I}
-        return new{S,A,I}(delta, indices, translation)
+    function SparseEmbeddingUpdate{S}(delta::A, indices::I) where {S,A,I}
+        return new{S,A,I}(delta, indices)
     end
 end
 
@@ -53,12 +54,13 @@ function uncompress(
 end
 
 # Compress all updates for each column in place.
-function crunch!(x::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector}) where {N,A}
+# The updates to the final embedding table can then all be performed at once.
+function crunch!(
+    x::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
+    translation::Dict{Int,Int} = Dict{Int,Int}(),
+) where {N,A}
     head = 1
-    # Unpack things ...
-    delta = x.delta
-    indices = x.indices
-    translation = x.translation
+    @unpack delta, indices = x
     empty!(translation)
 
     for i in Base.OneTo(size(delta, 2))
@@ -72,7 +74,7 @@ function crunch!(x::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector}) where {
             _dst = columnview(delta, head)
             _src = columnview(delta, i)
             for i in Base.OneTo(N)
-                _dst[i] = _src[i]
+                @inbounds(_dst[i] = _src[i])
             end
 
             indices[head] = target_column
@@ -80,12 +82,12 @@ function crunch!(x::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector}) where {
             continue
         end
 
-        # TODO: accelerate
-        #columnview(delta, accumulation_column) .+= columnview(delta, i)
+        # We already have a column in `delta` for the target destination.
+        # Add the next update in place.
         _dst = columnview(delta, accumulation_column)
         _src = columnview(delta, i)
         for i in Base.OneTo(N)
-            _dst[i] += _src[i]
+            @inbounds(_dst[i] += _src[i])
         end
     end
     return head - 1
