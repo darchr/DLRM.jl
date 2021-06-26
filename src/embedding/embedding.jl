@@ -1,20 +1,25 @@
 module _EmbeddingTables
 
-export SimpleEmbedding, lookup, maplookup, SparseEmbeddingUpdate
+# types
+export AbstractEmbeddingTable, SimpleEmbedding, SplitEmbedding
+export SparseEmbeddingUpdate, Static
+
+# functions
+export lookup, maplookup
+
+# strategies
 export DefaultStrategy, SimpleParallelStrategy, PreallocationStrategy
 
+# local deps
 using .._Utils
 
+# deps
 import ChainRulesCore
 import Flux
 import Polyester
 import SIMD
 import UnPack: @unpack
 import Zygote
-
-#using MacroTools
-
-const TIMES = UInt[]
 
 # Execution strategies describe how to perform `maplookup` across an ensemble of embedding
 # tables.
@@ -23,7 +28,6 @@ const TIMES = UInt[]
 #
 # This provides an entry point for developing strategies specialized for PMM
 abstract type AbstractExecutionStrategy end
-struct DefaultStrategy <: AbstractExecutionStrategy end
 
 #####
 ##### Embedding Table API
@@ -36,21 +40,41 @@ struct DefaultStrategy <: AbstractExecutionStrategy end
 abstract type AbstractLookupType end
 struct Dynamic <: AbstractLookupType end
 struct Static{N} <: AbstractLookupType end
+Static(N) = Static{N}()
 
-# Super type for Embedding Tables
+# For now, require nice alignment for static kernels.
+const VECTOR_WIDTH_BYTES = 64
+function require_cache_alignment(::Type{Static{N}}, ::Type{T}) where {N,T}
+    rem = mod(sizeof(T) * N, VECTOR_WIDTH_BYTES)
+    if !iszero(rem)
+        msg = """
+        Due to implementation limitations, the feature size for static lookup
+        kernels must align to $VECTOR_WIDTH_BYTES bytes!
+
+        For feature size $N, this is instead $(rem)!
+        """
+        throw(ArgumentError(msg))
+    end
+    return nothing
+end
+
+# Supertype for Embedding Tables
 abstract type AbstractEmbeddingTable{S<:AbstractLookupType,T} <: AbstractArray{T,2} end
+function require_cache_alignment(::AbstractEmbeddingTable{Static{N},T}) where {N,T}
+    return require_cache_alignment(Static{N}, T)
+end
+require_cache_alignment(::AbstractEmbeddingTable{Dynamic}) = nothing
 
 # Some generic interface implementations for AbstractEmbeddingTables
 Base.IndexStyle(::AbstractEmbeddingTable) = Base.IndexLinear()
 
 featuresize(A::AbstractMatrix) = size(A, 1)
 featuresize(A::AbstractEmbeddingTable{Static{N}}) where {N} = N
-lookuptype(::AbstractEmbeddingTable{S}) where {S} = S()
 
 function columnpointer(A::AbstractMatrix{T}, i::Integer) where {T}
-    return pointer(A) + strides(A)[2] * sizeof(T) * (i-1)
+    return pointer(A) + strides(A)[2] * sizeof(T) * (i - 1)
 end
-@inline columnview(A::AbstractMatrix, i) = view(A, 1:size(A,1), i)
+@inline columnview(A::AbstractMatrix, i) = view(A, 1:size(A, 1), i)
 
 # Interface
 include("simd.jl")
@@ -60,18 +84,5 @@ include("update.jl")
 # Embedding Table struct implementations
 include("simple.jl")
 include("split.jl")
-
-#####
-##### Random Utility Functions
-#####
-
-# Check if `A` is aligned to a cache-line boundary.
-# If not, get angry.
-function cached_aligned_error(A)
-    if !iszero(mod(convert(Int, pointer(A)), 64))
-        error("Array must be aligned to a cache-line boundary (multiple of 64-bytes)!")
-    end
-end
-
 
 end

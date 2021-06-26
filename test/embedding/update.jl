@@ -1,136 +1,86 @@
-#####
-##### Test Sparse Updates
-#####
+function non_reducing_update(
+    table::DLRM.AbstractEmbeddingTable, baseline::Matrix; numtests = 10
+)
+    @test size(table) == size(baseline)
+    @test length(table) == length(table)
+    nrows, ncols = size(table)
 
-@testset "Testing Sparse Update" begin
-    EmbeddingTables = DLRM._EmbeddingTables
+    opt = Flux.Descent(10.0)
+    for _ = 1:numtests
+        # Generate random lookup indices which may include repeats.
+        indices = rand(1:ncols, ncols)
 
-    # We have an optimized version of the reducing lookup when the feature-size of the
-    # embedding table is known at compile-time.
-    #
-    # Here, we test the update routine by comparing with the generic dynamic fallback.
-    #
-    # STEPS
-    # 1. Create a base array to create two embedding tables: a statically sized one and a
-    #    "dynamically" sized one.
-    #
-    # 2. Manually construct a SparseEmbeddingUpdate so we know what the update is going to
-    #    be.
-    #
-    # 3. Run both of the updates and see if we get the same result.
-    # @testset "Static-Reduction Update" begin
-    #     featuresizes = [16,32,48,64,128,256]
-    #     for featuresize in featuresizes
-    #         ncols = 100
-    #         nlookups = 40
-    #         batchsize = 320
+        out_ref, back_ref = Zygote._pullback(DLRM.lookup, baseline, indices)
+        out, back = Zygote._pullback(DLRM.lookup, table, indices)
 
-    #         base = zeros(Float32, featuresize, ncols)
+        @test out == out_ref
 
-    #         # Construct dynamic and static tables
-    #         dynamic = EmbeddingTables.SimpleEmbedding(copy(base))
-    #         static = EmbeddingTables.SimpleEmbedding(copy(base), Val(featuresize))
-    #         split_static = EmbeddingTables.SplitEmbedding(copy(base), 10)
+        # Seed for the sensitivity.
+        diff_out = randn(Float32, size(out))
 
-    #         # Manually construct an update
-    #         indices = rand(1:ncols, nlookups, batchsize)
-    #         delta = randn(Float32, featuresize, batchsize)
-    #         update = EmbeddingTables.SparseEmbeddingUpdate(delta, indices)
+        # The results here have different types, so we can't compare them directly.
+        # Instead, we need to use the `uncompress` function to turn the `diff_table`
+        # into a full array.
+        diff_baseline = back_ref(diff_out)
+        @test length(diff_baseline) == 3
+        @test diff_baseline[1] === nothing
+        @test diff_baseline[3] === nothing
+        diff_baseline = diff_baseline[2]
 
-    #         # Apply the update to the dynamic and static tables
-    #         Flux.Optimise.update!(dynamic, update)
-    #         Flux.Optimise.update!(static, update)
-    #         Flux.Optimise.update!(split_static, update)
+        diff_table = back(diff_out)
+        @test length(diff_table) == 3
+        @test diff_table[1] === nothing
+        @test diff_table[3] === nothing
+        diff_table = diff_table[2]
 
-    #         @test isapprox(dynamic, static)
-    #         @test isapprox(static, split_static)
-    #     end
-    # end
-end
+        @test isa(diff_table, DLRM.SparseEmbeddingUpdate)
+        uncompressed = DLRM._EmbeddingTables.uncompress(diff_table, size(diff_baseline, 2))
+        @test isapprox(diff_baseline, uncompressed)
 
-#####
-##### Update Pipeline
-#####
+        # Try crunching and decompressing again, the result should still be the same.
+        maxindices = DLRM._EmbeddingTables.crunch!(diff_table)
+        uncompressed = DLRM._EmbeddingTables.uncompress(
+            diff_table, size(diff_baseline, 2); maxindices = maxindices
+        )
+        @test isapprox(diff_baseline, uncompressed)
 
-function update_routine(baseline, new, iters; lookups_per_output = 1)
-    EmbeddingTables = DLRM._EmbeddingTables
-    @test size(baseline) == size(new)
-    @test length(baseline) == length(new)
+        # N.B: Zygote is dropping gradients when there are repeated indices.
 
-    nrows, ncols = size(new)
-
-    # Create a loss function and loss input
-    loss(A, I, x) = Flux.mse(EmbeddingTables.lookup(A, I), x)
-
-    opt = Flux.Descent(0.1)
-    for iter in 1:iters
-        # Create lookup indices and an example loss.
+        # Next - make sure the Flux update pipeline works as expected with the compressed
+        # update.
         #
-        # Keep the number of indices to lookup small, but large enough to get the cache-line
-        # alignment.
-        nindices = 10
-        if lookups_per_output == 1
-            I = rand(1:ncols, nindices)
-        else
-            I = [rand(1:ncols) for _ in 1:lookups_per_output, _ in 1:nindices]
-        end
+        #
+        # diff_table = back(diff_out)[2]
+        # zeros_baseline = similar(baseline)
+        # zeros_baseline .= zero(eltype(zeros_baseline))
+        # zeros_table = zeros(table)
 
-        loss_input = randn(Float32, nrows, nindices)
-
-        # Gradient Computations
-        grads_baseline = Zygote.gradient(Params((baseline,)))  do
-            loss(baseline, I, loss_input)
-        end
-
-        grads_new = Zygote.gradient(Params((new,)))  do
-            loss(new, I, loss_input)
-        end
-
-        # Test that produces updates are approximately equal
-        uncompressed = EmbeddingTables.uncompress(grads_new[new], size(baseline, 2))
-        @test isapprox(grads_baseline[baseline], uncompressed)
-
-        Flux.Optimise.update!(opt, baseline, grads_baseline.grads[baseline])
-        Flux.Optimise.update!(opt, new, grads_new.grads[new])
-
-        # Update should affect both the `baseline` and the `new` table the same.
-        equal = isapprox(baseline, new)
-        @test equal
-        if !equal
-            # Find all the mismatching columns.
-            mismatch_cols = findall(eachcol(baseline) .!= eachcol(new))
-            @show mismatch_cols
-            # printstyled(stdout, "Baseline\n"; color = :cyan)
-            # display(baseline)
-            # printstyled(stdout, "New\n"; color = :cyan)
-            # display(new)
-            # printstyled(stdout, "Difference\n"; color = :cyan)
-            # display(!isapprox.(new, baseline))
-            println()
-        end
+        # Flux.Optimise.update!(opt, zeros_baseline, diff_baseline)
+        # Flux.Optimise.update!(opt, zeros_table, diff_table)
+        # @test isapprox(zeros_baseline, zeros_table)
     end
 end
 
-@testset "Testing Crunch" begin
-    EmbeddingTables = DLRM._EmbeddingTables
+#####
+##### Tests
+#####
 
+@testset "Testing Crunch" begin
     delta = rand(Float32, 16, 5)
     delta_old = copy(delta)
 
-    indices = [4,1,4,2,1]
+    indices = [4, 1, 4, 2, 1]
     # Idiot check
     @test length(indices) == size(delta, 2)
 
-    update = EmbeddingTables.SparseEmbeddingUpdate{EmbeddingTables.Static{size(delta,1)}}(
-        delta,
-        indices,
-    )
-    newlength = EmbeddingTables.crunch!(update)
+    update = DLRM.SparseEmbeddingUpdate{DLRM.Static{size(delta, 1)}}(delta, indices)
+    newlength = DLRM._EmbeddingTables.crunch!(update)
+
     @test newlength == length(unique(indices))
-    @test view(update.indices, 1:newlength)  == unique(indices)
-    @test view(delta, :, 1) == delta_old[:,1] + delta_old[:,3]
-    @test view(delta, :, 2) == delta_old[:,2] + delta_old[:,5]
-    @test view(delta, :, 3) == delta_old[:,4]
+    @test view(update.indices, 1:newlength) == unique(indices)
+    @test view(delta, :, 1) == delta_old[:, 1] + delta_old[:, 3]
+    @test view(delta, :, 2) == delta_old[:, 2] + delta_old[:, 5]
+    @test view(delta, :, 3) == delta_old[:, 4]
 end
 
 @testset "Testing Update" begin
@@ -142,50 +92,11 @@ end
 
     @testset "Simple" begin
         for rows in nrows
-            # # Dynamic
-            # base = randn(Float32, rows, ncols)
-            # A = copy(base)
-            # B = EmbeddingTables.SimpleEmbedding(copy(base))
-            # update_routine(A, B, numtests)
-
             # Static
             base = randn(Float32, rows, ncols)
-            A = copy(base)
-            B = EmbeddingTables.SimpleEmbedding(copy(base), Val(rows))
-            update_routine(A, B, numtests)
+            A = DLRM.SimpleEmbedding{DLRM.Static{rows}}(copy(base))
+            B = copy(base)
+            non_reducing_update(A, B; numtests = numtests)
         end
     end
-
-    @testset "Split" begin
-        chunk_sizes = [10, 20, 30, 40, 50]
-        for rows in nrows
-            base = randn(Float32, rows, ncols)
-            for cols_per_chunk in chunk_sizes
-                A = copy(base)
-                B = EmbeddingTables.SplitEmbedding(copy(base), cols_per_chunk)
-                update_routine(A, B, numtests)
-            end
-        end
-    end
-
-    # @testset "Reducing Simple" begin
-    #     for rows in nrows
-    #         base = randn(Float32, rows, ncols)
-    #         A = copy(base)
-    #         B = EmbeddingTables.SimpleEmbedding(copy(base), Val(size(base,1)))
-    #         update_routine(A, B, numtests; lookups_per_output = 5)
-    #     end
-    # end
-
-    # @testset "Reducing Split" begin
-    #     chunk_sizes = [10, 20, 30, 40, 50]
-    #     for rows in nrows
-    #         base = randn(Float32, rows, ncols)
-    #         for cols_per_chunk in chunk_sizes
-    #             A = copy(base)
-    #             B = EmbeddingTables.SplitEmbedding(copy(base), cols_per_chunk)
-    #             update_routine(A, B, numtests; lookups_per_output = 5)
-    #         end
-    #     end
-    # end
 end

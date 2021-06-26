@@ -164,7 +164,7 @@ gather_embeddings!(x, vec) = append!(x.embeddings, vec)
 
 const TIMES = UInt64[]
 
-function train!(loss, model, data, opt; cb = () -> (), maxiters = 20)
+function train!(loss, model, data, opt; cb = () -> (), maxiters = nothing)
     # Run once to make sure data formats are initialized.
     _ = Zygote.gradient(loss, model, first(data)...)
 

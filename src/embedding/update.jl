@@ -4,10 +4,10 @@
 
 ### Non-reduction case.
 function Flux.Optimise.update!(
-        x::AbstractEmbeddingTable,
-        xbar::SparseEmbeddingUpdate{<:Any,A,I},
-        numcols::Integer
-    ) where {A,I <: AbstractVector}
+    x::AbstractEmbeddingTable,
+    xbar::SparseEmbeddingUpdate{Dynamic,A,I},
+    numcols::Integer
+) where {A,I <: AbstractVector}
     for (src_col, dst_col) in enumerate(view(xbar.indices, Base.OneTo(numcols)))
         # Update on a column-by-column basis
         update = columnview(xbar.delta, src_col)
@@ -17,45 +17,26 @@ function Flux.Optimise.update!(
     return nothing
 end
 
-### Reducing Case
-# Use `Flux.Optimise.update!` to dispatch to either the dynamic implementation or the
-# unrolled, optimized static implementation.
-#
-# These implementations live under `__update!`.
-# The static case lives in `simd.jl`.
-function Flux.Optimise.update!(
-        x::AbstractEmbeddingTable,
-        xbar::SparseEmbeddingUpdate{<:Any,A,I}
-    ) where {A,I <: AbstractMatrix}
-
-    return __update!(x, xbar)
-end
-
-# Dynamic update case
-function __update!(x::AbstractEmbeddingTable, xbar)
-    for col in 1:size(xbar.indices, 2)
-        for row in 1:size(xbar.indices, 1)
-            @inbounds slice = xbar.indices[row, col]
-
-            # Why doesn't LLVM vectorize this?
-            # Probably because it doesn't know that `x` and `xbar` don't alias?
-            @inbounds for offset in 1:featuresize(x)
-                x[offset, slice] -= xbar.delta[offset, col]
-            end
-        end
-    end
+@generated function Flux.Optimise.update!(
+    x::AbstractEmbeddingTable{Static{N},T} ,
+    xbar::SparseEmbeddingUpdate{Static{N},A,I},
+    numcols::Integer
+) where {N,T,A,I <: AbstractVector}
+    return emit_update(T, N)
 end
 
 #####
 ##### Optimizers
 #####
 
-# For now, just hijack a higher level of the Flux update chain.
-# TODO: lazy wrapper for the learning rate to apply in `__update!`.
 function Flux.Optimise.update!(opt, x, xbar::SparseEmbeddingUpdate, args...)
     return Flux.update!(x, Flux.Optimise.apply!(opt, x, xbar, args...)...)
 end
 
+# Prepare the SparseEmbeddingUpdate by first crunching it so we have less to write
+# to the actual embedding table.
+# During the crunch, we might as well multiply the gradiants by the learning rate
+# since we're accessing
 function Flux.Optimise.apply!(
         opt::Flux.Descent,
         x,
@@ -64,8 +45,7 @@ function Flux.Optimise.apply!(
     )
 
     eta = convert(eltype(xbar.delta), opt.eta)
-    newcols = crunch!(xbar, translation)
-    view(xbar.delta, :, Base.OneTo(newcols)) .*= eta
+    newcols = crunch!(xbar, translation; mulby = eta)
     return xbar, newcols
 end
 

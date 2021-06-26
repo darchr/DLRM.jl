@@ -412,7 +412,7 @@ function kaggle_dlrm(allocator = default_allocator)
         #TERABYTE_EMBEDDING_SIZES;
         KAGGLE_EMBEDDING_SIZES;
         constructor = allocator,
-        embedding_constructor = x -> SimpleEmbedding(x, Val(128)),
+        embedding_constructor = x -> SimpleEmbedding{Static{128}}(x),
         interaction = dot,
     )
     # return dlrm(
@@ -429,15 +429,37 @@ end
 ##### PyTorch HDF5 loader
 #####
 
+# Allocate arrays so the base pointer is aligned to the start of a cache line.
+function aligned_allocator(::Type{T}, dims::NTuple{N,Int}) where {T,N}
+    ptr_ref = Ref(Ptr{Nothing}())
+    bytes = sizeof(T) * prod(dims)
+    alignment = 64
+
+    ret = ccall(
+        :posix_memalign,
+        Cint,
+        (Ptr{Ptr{Cvoid}}, Csize_t, Csize_t),
+        ptr_ref,
+        alignment,
+        bytes,
+    )
+
+    A = unsafe_wrap(Array, Ptr{T}(ptr_ref[]), dims; own = false)
+    finalizer(A) do _A
+        Libc.free(pointer(_A))
+    end
+    return A
+end
+
 # Load models from an HDF5 File.
 # TODO: Provide options for CachedArrays etc.
-function load_hdf5(path::AbstractString, allocator = default_allocator)
+function load_hdf5(path::AbstractString, allocator = aligned_allocator)
     return HDF5.h5open(path) do file
         load_hdf5(file, allocator)
     end
 end
 
-function load_hdf5(file::HDF5.File, allocator = default_allocator)
+function load_hdf5(file::HDF5.File, allocator = aligned_allocator)
     # Load Embeddings
     embeddings = load_embeddings(file, allocator)
     bottom_mlp = load_mlp(file, "bot_", allocator)
@@ -446,18 +468,18 @@ function load_hdf5(file::HDF5.File, allocator = default_allocator)
     return DLRMModel(bottom_mlp, embeddings, dot, top_mlp)
 end
 
-function load_embeddings(file::HDF5.File, allocator = default_allocator)
+function load_embeddings(file::HDF5.File, allocator = aligned_allocator)
     names = sort(filter(startswith("emb"), keys(file)); lt = NaturalSort.natural)
     return map(names) do name
         _data = read(file, name)
         data = allocator(eltype(_data), size(_data))
         data .= _data
-        return SimpleEmbedding(data, Val(size(data,1)))
+        return SimpleEmbedding{Static{size(data,1)}}(data)
     end
 end
 
 function load_mlp(
-    file::HDF5.File, prefix_filter::AbstractString, allocator = default_allocator
+    file::HDF5.File, prefix_filter::AbstractString, allocator = aligned_allocator
 )
     names = sort(filter(startswith(prefix_filter), keys(file)); lt = NaturalSort.natural)
     # Names for layers are structured like this:

@@ -54,9 +54,6 @@ function tocached(::Type{T}, m::M, s::S = CachedArrays.NotBusy()) where {T,M,S}
     return ToCached{T,M,S}(m, s)
 end
 
-OneDNN.ancestor(x::CachedArrays.CachedArray) = x
-OneDNN.ancestor(x::CachedArrays.HeapArray) = x
-
 function (f::ToCached{T,<:CachedArrays.CacheManager})(x...) where {T}
     return CachedArrays.CachedArray{T}(undef, f.manager, x; status = f.status)
 end
@@ -80,12 +77,10 @@ const UnwritableMemory = MemoryAround{UnwritableCachedArray}
 const UnreadableMemory = MemoryAround{UnreadableCachedArray}
 
 CachedArrays.@wrapper OneDNN.Memory array
-function CachedArrays.constructorof(
-    ::Type{_EmbeddingTables.SimpleEmbedding{_EmbeddingTables.Static{N},T,A}}
-) where {N,T,A}
-    return x -> _EmbeddingTables.SimpleEmbedding(x, Val(N))
+CachedArrays.@wrapper SimpleEmbedding data
+function CachedArrays.constructorof(::Type{<:SimpleEmbedding{Static{N}}}) where {N}
+    return SimpleEmbedding{Static{N}}
 end
-CachedArrays.@wrapper _EmbeddingTables.SimpleEmbedding data
 
 # Accessibility hooks
 # Creating Model
@@ -114,10 +109,10 @@ end
 end
 
 @annotate function Flux.update!(
-    x::_EmbeddingTables.SimpleEmbedding{<:Any,<:Any,<:UnwritableCachedArray},
-    xbar::_EmbeddingTables.SparseEmbeddingUpdate{<:Any,<:Any,<:AbstractVector},
+    x::_EmbeddingTables.SimpleEmbedding{Static{N},<:Any,<:UnwritableCachedArray},
+    xbar::_EmbeddingTables.SparseEmbeddingUpdate{Static{N},<:Any,<:AbstractVector},
     numcols::Integer
-)
+) where {N}
     return __recurse__(__writable__(x), xbar, numcols)
 end
 
