@@ -1,6 +1,5 @@
 module _Model
 
-
 export DLRMModel, dlrm
 
 # internal deps
@@ -138,9 +137,9 @@ function (D::DLRMModel)(
     return vec(OneDNN.materialize(out))
 end
 
-# inplace version of `Flux.glorot_normal`
-glorot_normal!(x) = randn!(x) .* sqrt(2.0f0 / sum(Flux.nfan(size(x)...)))
-zeros!(x) = (x .= zero(eltype(x)))
+# # inplace version of `Flux.glorot_normal`
+# glorot_normal!(x) = randn!(x) .* sqrt(2.0f0 / sum(Flux.nfan(size(x)...)))
+# zeros!(x) = (x .= zero(eltype(x)))
 
 # Test entry point for now.
 function dlrm(

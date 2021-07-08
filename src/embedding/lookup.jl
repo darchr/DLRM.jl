@@ -2,26 +2,34 @@
 ##### Reference Implementations
 #####
 
+### Non-reducing
 lookup(A::AbstractMatrix, I::AbstractVector{<:Integer}) = A[:, I]
-# function lookup(A::AbstractMatrix, II::MI)
-#     _A = [lookup(A, II[:, i]) for i = 1:size(II, 2)]
-#     _b = [[sum(_a[i, :]) for i = 1:size(_a, 1)] for _a in _A]
-#     return hcat(_b...)
-# end
+
+### Reducing
+function lookup(A::AbstractMatrix, II::AbstractMatrix{<:Integer})
+    _A = [lookup(A, II[:, i]) for i = 1:size(II, 2)]
+    _b = [[sum(_a[i, :]) for i = 1:size(_a, 1)] for _a in _A]
+    return hcat(_b...)
+end
 
 #####
 ##### lookup
 #####
 
-# Non-reducing lookup.
-function lookup(A::AbstractEmbeddingTable{S,T}, I::AbstractVector{<:Integer}) where {S,T}
+const VecOrMat{T} = Union{Vector{T},Matrix{T}}
+_trailing_size(x::AbstractVector) = length(x)
+_trailing_size(x::AbstractMatrix) = size(x, 2)
+
+function lookup(A::AbstractEmbeddingTable{S,T}, I::VecOrMat{<:Integer}) where {S,T}
     nrows = featuresize(A)
-    O = similar(example(A), T, nrows, length(I))
+    O = similar(example(A), T, nrows, _trailing_size(I))
     # inner `lookup!` dispatches to either an optimized static or dynamic fallback
     # implementations.
     lookup!(O, A, I)
     return O
 end
+
+### Non-reducing
 
 # Optimized static branch.
 # Implementation is in "simd.jl"
@@ -38,6 +46,30 @@ function lookup!(
     nrows = featuresize(A)
     for (col, i) in enumerate(I)
         @inbounds ptrA = columnpointer(A, i)
+        @inbounds ptrO = columnpointer(O, col)
+        unsafe_copyto!(ptrO, ptrA, nrows)
+    end
+end
+
+### Reducing (sum)
+
+# Optimized static branch.
+# Implementation is in "simd.jl"
+@generated function lookup!(
+    dst, src::AbstractEmbeddingTable{Static{N},T}, indices::AbstractMatrix{<:Integer}
+) where {T,N}
+    return emit_lookup_reducing(T, N)
+end
+
+# fallback dynamic implementation
+function lookup!(
+    O, A::AbstractEmbeddingTable{Dynamic,T}, I::AbstractMatrix{<:Integer}
+) where {T}
+    nrows = featuresize(A)
+    sz = size(i, 2)
+    for j in enumerate(Base.OneTo(size(I, 1))), i in Base.OneTo(sz)
+        col = @inbounds(I[i, j])
+        @inbounds ptrA = columnpointer(A, j)
         @inbounds ptrO = columnpointer(O, col)
         unsafe_copyto!(ptrO, ptrA, nrows)
     end
@@ -61,7 +93,7 @@ end
 function uncompress(
     x::SparseEmbeddingUpdate{<:Any,<:Any,<:AbstractVector},
     dstcols = maximum(x.indices);
-    maxindices = length(x.indices)
+    maxindices = length(x.indices),
 )
     @unpack indices, delta = x
     dst = similar(delta, size(delta, 1), dstcols)
@@ -77,42 +109,88 @@ end
 
 # Compress all updates for each column in place.
 # The updates to the final embedding table can then all be performed at once.
-function crunch!(
-    x::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
+
+_maybe_columnview(x::AbstractVector, i) = x[i]
+_maybe_columnview(x::AbstractMatrix, i) = view(x, :, i)
+
+function crunch(
+    src::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
     translation::Dict{Int,Int} = Dict{Int,Int}();
     mulby = one(eltype(A)),
 ) where {N,A}
-    head = 1
-    @unpack delta, indices = x
-    empty!(translation)
+    return _crunch!(src, src, translation, mulby)
+end
 
-    for i in Base.OneTo(size(delta, 2))
-        target_column = indices[i]
-        accumulation_column = get!(translation, target_column, head)
-        if accumulation_column == head
-            # Move this column to the head pointer and update the `indices` array
-            # appropriately.
-            # Since we're moving sequentially, we don't have to worry about destroying data.
-            _dst = columnview(delta, head)
-            _src = columnview(delta, i)
-            for i in Base.OneTo(N)
-                @inbounds(_dst[i] = mulby * _src[i])
+function crunch(
+    src::SparseEmbeddingUpdate{Static{N},A,<:AbstractMatrix},
+    translation::Dict{Int,Int} = Dict{Int,Int}();
+    mulby = one(eltype(A)),
+) where {N,A}
+    # Use our dictionary to count the number of unique indices.
+    for i in src.indices
+        translation[i] = 0
+    end
+    num_unique_indices = length(translation)
+
+    # Now, create a new SparseEmbeddingUpdate that is large enough to hold our potentially
+    # expanded result.
+    src_delta = src.delta
+    src_indices = src.indices
+    dst_delta = similar(
+        src_delta, eltype(src_delta), size(src_delta, 1), num_unique_indices
+    )
+    dst_indices = similar(src_indices, eltype(src_indices), num_unique_indices)
+    dst = SparseEmbeddingUpdate{Static{N}}(dst_delta, dst_indices)
+    return _crunch!(dst, src, translation, mulby)
+end
+
+# N.B.: This algorithm is written so `dst` and `src` can be the same object.
+# This will only work if the number of unique indices in `src` is less than or equal
+# the current `length(src.indices)`.
+#
+# For the multi-lookup case, we creatge a new `SparseEmbeddingUpdate` struct and use
+# that.
+function _crunch!(
+    dst::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
+    src::SparseEmbeddingUpdate{Static{N},A,<:VecOrMat},
+    translation::Dict{Int,Int},
+    mulby,
+) where {N,A}
+    head = 1
+
+    # Unpack Arguments
+    dst_delta, dst_indices = dst.delta, dst.indices
+    src_delta, src_indices = src.delta, src.indices
+
+    empty!(translation)
+    for i in Base.OneTo(size(src_delta, 2))
+        for target_column in _maybe_columnview(src_indices, i)
+            accumulation_column = get!(translation, target_column, head)
+            if accumulation_column == head
+                # Move this column to the head pointer and update the `indices` array
+                # appropriately.
+                # Since we're moving sequentially, we don't have to worry about destroying data.
+                _dst = columnview(dst_delta, head)
+                _src = columnview(src_delta, i)
+                for j in Base.OneTo(N)
+                    @inbounds(_dst[j] = mulby * _src[j])
+                end
+
+                dst_indices[head] = target_column
+                head += 1
+                continue
             end
 
-            indices[head] = target_column
-            head += 1
-            continue
-        end
-
-        # We already have a column in `delta` for the target destination.
-        # Add the next update in place.
-        _dst = columnview(delta, accumulation_column)
-        _src = columnview(delta, i)
-        for i in Base.OneTo(N)
-            @inbounds(_dst[i] += mulby * _src[i])
+            # We already have a column in `delta` for the target destination.
+            # Add the next update in place.
+            _dst = columnview(dst_delta, accumulation_column)
+            _src = columnview(src_delta, i)
+            for j in Base.OneTo(N)
+                @inbounds(_dst[j] += mulby * _src[j])
+            end
         end
     end
-    return head - 1
+    return dst, head - 1
 end
 
 # -- pullback

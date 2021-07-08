@@ -68,7 +68,7 @@ uuid = "052768ef-5323-5732-b1bb-66c8b64840ba"
 version = "3.3.1"
 
 [[CachedArrays]]
-deps = ["ArrayInterface", "Cassette", "ConstructionBase", "DataStructures", "Dates", "Distributions", "DocStringExtensions", "LLVM", "LibGit2", "Libdl", "LinearAlgebra", "MacroTools", "Mmap", "ProgressMeter", "Random", "SIMD", "TimerOutputs"]
+deps = ["ArrayInterface", "Cassette", "ConstructionBase", "DataStructures", "Dates", "Distributions", "DocStringExtensions", "JSON", "LLVM", "LibGit2", "Libdl", "LinearAlgebra", "MacroTools", "Mmap", "Polyester", "ProgressMeter", "Random", "SIMD", "TimerOutputs"]
 path = "../CachedArrays"
 uuid = "ab676e89-bb37-4f49-b167-74749319f3dc"
 version = "0.1.0"

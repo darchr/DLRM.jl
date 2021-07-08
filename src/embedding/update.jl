@@ -45,7 +45,6 @@ function Flux.Optimise.apply!(
     )
 
     eta = convert(eltype(xbar.delta), opt.eta)
-    newcols = crunch!(xbar, translation; mulby = eta)
-    return xbar, newcols
+    return crunch(xbar, translation; mulby = eta)
 end
 

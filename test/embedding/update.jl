@@ -38,7 +38,7 @@ function non_reducing_update(
         @test isapprox(diff_baseline, uncompressed)
 
         # Try crunching and decompressing again, the result should still be the same.
-        maxindices = DLRM._EmbeddingTables.crunch!(diff_table)
+        diff_table, maxindices = DLRM._EmbeddingTables.crunch(diff_table)
         uncompressed = DLRM._EmbeddingTables.uncompress(
             diff_table, size(diff_baseline, 2); maxindices = maxindices
         )
@@ -74,7 +74,7 @@ end
     @test length(indices) == size(delta, 2)
 
     update = DLRM.SparseEmbeddingUpdate{DLRM.Static{size(delta, 1)}}(delta, indices)
-    newlength = DLRM._EmbeddingTables.crunch!(update)
+    update, newlength = DLRM._EmbeddingTables.crunch(update)
 
     @test newlength == length(unique(indices))
     @test view(update.indices, 1:newlength) == unique(indices)

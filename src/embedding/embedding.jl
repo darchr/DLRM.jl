@@ -18,6 +18,7 @@ import ChainRulesCore
 import Flux
 import Polyester
 import SIMD
+import StaticArrays: SVector
 import UnPack: @unpack
 import Zygote
 

@@ -34,6 +34,25 @@ function emit_lookup(::Type{T}, numelements::Integer) where {T}
     end
 end
 
+function emit_lookup_reducing(::Type{T}, numelements::Integer) where {T}
+    svector = SVector{numelements,T}
+    return quote
+        cache_aligned_error(dst)
+        sz = size(indices, 1)
+        for dst_col in Base.OneTo(size(indices, 2))
+            # Move the first element to the destination, then sum.
+            src_col = @inbounds(indices[1, dst_col])
+
+            accum = unsafe_load(Ptr{$svector}(columnpointer(src, src_col)))
+            for offset in 2:sz
+                src_col = @inbounds(indices[offset, dst_col])
+                accum += unsafe_load(Ptr{$svector}(columnpointer(src, src_col)))
+            end
+            unsafe_store!(Ptr{$svector}(columnpointer(dst, dst_col)), accum)
+        end
+    end
+end
+
 function emit_update(::Type{T}, numelements::Integer) where {T}
     function emit_sub(var, vectype)
         tmp = gensym()
@@ -45,8 +64,6 @@ function emit_update(::Type{T}, numelements::Integer) where {T}
     return quote
         src = xbar.delta
         dst = x
-        @show numcols
-
         for (src_col, dst_col) in enumerate(view(xbar.indices, Base.OneTo(numcols)))
             src_ptr = columnpointer(src, src_col)
             dst_ptr = columnpointer(dst, dst_col)

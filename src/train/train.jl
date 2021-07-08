@@ -83,7 +83,6 @@ end
 #
 # The other reason is that this approach lets us not have to use the Flux style
 # "accum_param" semi-nightmare.
-
 struct DLRMParams{W,B,E}
     weights::Vector{W}
     # The weights and weight gradients end up with different layouts.
@@ -216,8 +215,8 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     len = length(param_weights) + length(param_embeddings)
     index_translation = params.weight_index_translations
 
-    Polyester.@batch per = thread for i in Base.OneTo(len)
-        #for i in Base.OneTo(len)
+    #@time Polyester.@batch per = core for i in Base.OneTo(len)
+    for i in Base.OneTo(len)
         if i <= m
             Flux.update!(
                 opt,

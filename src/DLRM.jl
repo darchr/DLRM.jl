@@ -23,6 +23,7 @@ using HDF5: HDF5
 using NaturalSort: NaturalSort
 using ProgressMeter: ProgressMeter
 import UnPack: @unpack
+import Zygote
 
 include("utils/utils.jl")
 using ._Utils
@@ -37,6 +38,33 @@ include("train/train.jl")
 using ._Train
 
 include("data/criteo.jl")
+
+CachedArrays.tostring(::Type{<:DLRMModel}) = "DLRMModel"
+CachedArrays.tostring(::Type{<:Flux.Chain}) = "Chain"
+CachedArrays.tostring(::Type{<:Zygote.Pullback}) = "Pullback"
+
+macro setup()
+    return quote
+        using DLRM, Zygote, Flux, HDF5, CachedArrays, OneDNN
+        manager = CachedArrays.CacheManager(
+            "/mnt/pm1/public/";
+            localsize = 50_000_000_000,
+            remotesize = 100_000_000_000,
+            #telemetry = CachedArrays.Telemetry(),
+        )
+        CachedArrays.materialize_os_pages!(manager.local_heap)
+        model = DLRM.kaggle_dlrm(DLRM.tocached(manager))
+        data = DLRM.load(DLRM.DAC(), "/mnt/data1/dac/train.bin")
+        loader = DLRM.DACLoader(
+            #data, 2^15; allocator = DLRM.tocached(manager, CachedArrays.ReadWrite())
+            data, 2048; allocator = DLRM.tocached(manager, CachedArrays.ReadWrite())
+        )
+        loss = DLRM._Train.wrap_loss(
+            DLRM._Train.bce_loss; strategy = DLRM.PreallocationStrategy(128)
+        )
+        opt = Flux.Descent(0.1)
+    end |> esc
+end
 
 #####
 ##### Keep these definitions here for now until we find a better home.
@@ -101,9 +129,7 @@ const MaybeTranspose{T} = Union{T,LinearAlgebra.Transpose{<:Any,<:T}}
 end
 
 @annotate function _EmbeddingTables.lookup!(
-    O,
-    A::SimpleEmbedding{S,T,<:UnreadableCachedArray},
-    I::AbstractVector{<:Integer},
+    O, A::SimpleEmbedding{S,T,<:UnreadableCachedArray}, I::AbstractVector{<:Integer}
 ) where {S,T,N}
     return __recurse__(O, __readable__(A), I)
 end
@@ -111,7 +137,7 @@ end
 @annotate function Flux.update!(
     x::_EmbeddingTables.SimpleEmbedding{Static{N},<:Any,<:UnwritableCachedArray},
     xbar::_EmbeddingTables.SparseEmbeddingUpdate{Static{N},<:Any,<:AbstractVector},
-    numcols::Integer
+    numcols::Integer,
 ) where {N}
     return __recurse__(__writable__(x), xbar, numcols)
 end
@@ -157,7 +183,9 @@ end
     return __recurse__(o, __writable__(x), __readable__(y))
 end
 
-@annotate function Flux.update!(o::Flux.Descent, x::UnwritableMemory, ix, y::UnreadableMemory, iy)
+@annotate function Flux.update!(
+    o::Flux.Descent, x::UnwritableMemory, ix, y::UnreadableMemory, iy
+)
     return __recurse__(o, __writable__(x), ix, __readable__(y), iy)
 end
 
