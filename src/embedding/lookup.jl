@@ -16,11 +16,14 @@ end
 ##### lookup
 #####
 
-const VecOrMat{T} = Union{Vector{T},Matrix{T}}
-_trailing_size(x::AbstractVector) = length(x)
-_trailing_size(x::AbstractMatrix) = size(x, 2)
+const VecOrMat{T} = Union{<:AbstractVector{T}, <:AbstractMatrix{T}}
+_trailing_size(x::AbstractArray) = size(x)[end]
 
-function lookup(A::AbstractEmbeddingTable{S,T}, I::VecOrMat{<:Integer}) where {S,T}
+# Need these definitions to avoid method ambiguity
+@inline lookup(A::AbstractEmbeddingTable, I::AbstractVector{<:Integer}) = _lookup(A, I)
+@inline lookup(A::AbstractEmbeddingTable, I::AbstractMatrix{<:Integer}) = _lookup(A, I)
+
+function _lookup(A::AbstractEmbeddingTable{S,T}, I::VecOrMat{<:Integer}) where {S,T}
     nrows = featuresize(A)
     O = similar(example(A), T, nrows, _trailing_size(I))
     # inner `lookup!` dispatches to either an optimized static or dynamic fallback
@@ -66,13 +69,22 @@ function lookup!(
     O, A::AbstractEmbeddingTable{Dynamic,T}, I::AbstractMatrix{<:Integer}
 ) where {T}
     nrows = featuresize(A)
-    sz = size(i, 2)
-    for j in enumerate(Base.OneTo(size(I, 1))), i in Base.OneTo(sz)
-        col = @inbounds(I[i, j])
-        @inbounds ptrA = columnpointer(A, j)
-        @inbounds ptrO = columnpointer(O, col)
-        unsafe_copyto!(ptrO, ptrA, nrows)
+    sz1, sz2 = size(I)
+    for j in Base.OneTo(sz2)
+        vO = columnview(O, j)
+        first = true
+        for i in Base.OneTo(sz1)
+            col = I[i, j]
+            vA = columnview(A, col)
+            if first
+                vO .= vA
+                first = false
+            else
+                vO .+= vA
+            end
+        end
     end
+    return nothing
 end
 
 #####
@@ -91,16 +103,18 @@ end
 
 # Convert the compressed representations
 function uncompress(
-    x::SparseEmbeddingUpdate{<:Any,<:Any,<:AbstractVector},
+    x::SparseEmbeddingUpdate,
     dstcols = maximum(x.indices);
     maxindices = length(x.indices),
 )
     @unpack indices, delta = x
-    dst = similar(delta, size(delta, 1), dstcols)
-    dst .= zero(eltype(dst))
+    dst = zeros(eltype(delta), size(delta, 1), dstcols)
     count = 0
-    for (column, update) in zip(indices, eachcol(delta))
-        columnview(dst, column) .+= update
+    for (column, update) in enumerate(eachcol(delta))
+        for c in _maybe_columnview(indices, column)
+            columnview(dst, c) .+= update
+        end
+
         count += 1
         count == maxindices && break
     end
@@ -109,9 +123,8 @@ end
 
 # Compress all updates for each column in place.
 # The updates to the final embedding table can then all be performed at once.
-
 _maybe_columnview(x::AbstractVector, i) = x[i]
-_maybe_columnview(x::AbstractMatrix, i) = view(x, :, i)
+_maybe_columnview(x::AbstractMatrix, i) = columnview(x, i)
 
 function crunch(
     src::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
@@ -148,14 +161,14 @@ end
 # This will only work if the number of unique indices in `src` is less than or equal
 # the current `length(src.indices)`.
 #
-# For the multi-lookup case, we creatge a new `SparseEmbeddingUpdate` struct and use
+# For the multi-lookup case, we create a new `SparseEmbeddingUpdate` struct and use
 # that.
 function _crunch!(
     dst::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
-    src::SparseEmbeddingUpdate{Static{N},A,<:VecOrMat},
+    src::SparseEmbeddingUpdate{Static{N},B,<:VecOrMat},
     translation::Dict{Int,Int},
     mulby,
-) where {N,A}
+) where {N,A,B}
     head = 1
 
     # Unpack Arguments
@@ -214,19 +227,20 @@ struct ColumnWrap{A}
     array::A
 end
 
-unwrap(x::ColumnWrap) = x.array
-Base.eachindex(x::ColumnWrap) = Base.OneTo(size(x.array, 2))
-Base.getindex(x::ColumnWrap, i::Integer) = view(x.array, :, i)
+_colons(::AbstractArray{T,N}) where {T,N} = ntuple(_ -> :, Val(N-1))
 
-Base.length(x::ColumnWrap) = size(x.array, 2)
+unwrap(x::ColumnWrap) = x.array
+Base.eachindex(x::ColumnWrap) = Base.OneTo(length(x))
+Base.getindex(x::ColumnWrap, i::Integer) = view(x.array, _colons(x.array)..., i)
+Base.length(x::ColumnWrap) = size(x.array, ndims(x.array))
 function Base.iterate(x::ColumnWrap, i = 1)
     return in(i, eachindex(x)) ? (@inbounds(x[i]), i + 1) : nothing
 end
 
 # Dispatch plumbing for-the-win.
 colwrap(x::ColumnWrap) = x
-colwrap(x::AbstractVector{<:AbstractVector}) = x
-colwrap(x::AbstractMatrix) = ColumnWrap(x)
+colwrap(x::AbstractVector{<:VecOrMat}) = x
+colwrap(x::AbstractArray) = ColumnWrap(x)
 
 #####
 ##### maplookup
@@ -288,8 +302,10 @@ struct PreallocationStrategy <: AbstractExecutionStrategy
 end
 PreallocationStrategy() = PreallocationStrategy(0)
 
-_batchsize(x::AbstractVector) = length(first(x))
-_batchsize(x::AbstractMatrix) = size(x, 1)
+_batchsize(x::AbstractVector{<:AbstractVector}) = length(first(x))
+_batchsize(x::AbstractMatrix{<:Integer}) = size(x, 1)
+
+_batchsize(x::AbstractVector{<:AbstractMatrix}) = size(first(x), 2)
 _batchsize(x::ColumnWrap) = _batchsize(unwrap(x))
 
 function maplookup(

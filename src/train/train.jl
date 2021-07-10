@@ -215,8 +215,7 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     len = length(param_weights) + length(param_embeddings)
     index_translation = params.weight_index_translations
 
-    #@time Polyester.@batch per = core for i in Base.OneTo(len)
-    for i in Base.OneTo(len)
+    Polyester.@batch per = core for i in Base.OneTo(len)
         if i <= m
             Flux.update!(
                 opt,

@@ -274,7 +274,8 @@ function fast_vcat(x::AbstractMatrix, ys::AbstractMatrix)
     vy = view(ys, 1:size(x, 1), :)
 
     # Manually unroll to two loops to help Polyester do the right thing.
-    Polyester.@batch per=core for j in axes(vy, 2), i in axes(vy, 1)
+    #Polyester.@batch per=core for j in axes(vy, 2), i in axes(vy, 1)
+    for j in axes(vy, 2), i in axes(vy, 1)
         vy[i, j] = x[i, j]
     end
     return ys

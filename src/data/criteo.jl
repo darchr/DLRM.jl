@@ -519,5 +519,17 @@ function load_inputs(file::HDF5.File)
     for _a in sparse
         _a .+= 1
     end
+
+    batchsize = length(labels)
+
+    # Maybe reshape if there are multiple lookups.
+    sparse = map(sparse) do _vec
+        if length(_vec) > batchsize
+            return reshape(_vec, :, batchsize)
+        else
+            return _vec
+        end
+    end
+
     return (; labels, dense, sparse)
 end

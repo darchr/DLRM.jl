@@ -38,6 +38,7 @@ include("train/train.jl")
 using ._Train
 
 include("data/criteo.jl")
+include("validation.jl")
 
 CachedArrays.tostring(::Type{<:DLRMModel}) = "DLRMModel"
 CachedArrays.tostring(::Type{<:Flux.Chain}) = "Chain"
