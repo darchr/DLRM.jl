@@ -260,7 +260,7 @@ function ChainRulesCore.rrule(
         return (
             ChainRulesCore.NoTangent(),
             ChainRulesCore.NoTangent(),
-            ChainRulesCore.@thunk(map(SparseEmbeddingUpdate{S}, Δs, colwrap(I))),
+            map(SparseEmbeddingUpdate{S}, Δs, colwrap(I)),
             ChainRulesCore.NoTangent(),
         )
     end
@@ -282,9 +282,14 @@ end
 struct SimpleParallelStrategy <: AbstractExecutionStrategy end
 function maplookup(::SimpleParallelStrategy, x::Vector{<:AbstractEmbeddingTable}, _I)
     out = Vector{typeof(example(x[1]))}(undef, length(x))
-    I = colwrap(_I)
-    Threads.@threads for i in eachindex(x, I)
-        out[i] = lookup(x[i], I[i])
+
+    # Need to capture this as a `ManualMemory.reference` to keep ManualMemory
+    # from exploding while trying to store all the cached array stuff.
+    I = ManualMemory.Reference(colwrap(_I))
+
+    # Note - this is a hack to get around Polyester doing something weird!
+    Polyester.@batch per=core for i in eachindex(x)
+        out[i] = lookup(x[i], ManualMemory.dereference(I)[i])
     end
     return out
 end
@@ -312,7 +317,7 @@ function maplookup(
     strategy::PreallocationStrategy, x::Vector{<:AbstractEmbeddingTable{T}}, _I
 ) where {T}
     # Preallocate destination.
-    I = colwrap(_I)
+    I = ManualMemory.Reference(colwrap(_I))
     rows = featuresize.(x)
     offset = strategy.prependrows
     batchsize = _batchsize(_I)
@@ -321,17 +326,13 @@ function maplookup(
     # For deciding where to index
     rows_sum = cumsum(rows)
     pushfirst!(rows_sum, 0)
-
-    #Threads.@threads for i in eachindex(x, I)
-    Polyester.@batch per = thread for i in eachindex(x)
+    views = map(eachindex(x)) do i
         start = 1 + offset + rows_sum[i]
         stop = offset + rows_sum[i + 1]
-
-        # Create destination view
-        O = view(data, start:stop, Base.OneTo(batchsize))
-        A = x[i]
-
-        lookup!(O, A, I[i])
+        return view(data, start:stop, Base.OneTo(batchsize))
+    end
+    Polyester.@batch per=core for i in eachindex(x)
+        lookup!(views[i], x[i], ManualMemory.dereference(I)[i])
     end
     return data
 end

@@ -19,6 +19,10 @@ using Zygote: Zygote
 # DocStringExtensions
 using DocStringExtensions
 
+const POST_INTERACTION_PAD_TO_MUL = 16
+cdiv(x, y) = 1 + div(x - 1, y)
+up_to_mul_of(x, y) = y * cdiv(x, y)
+
 include("interact.jl")
 
 # Strategy:
@@ -106,9 +110,7 @@ function callback(cb::C, sym::Symbol, f::F, x...) where {C,F}
     return y
 end
 
-Zygote.@adjoint function callback(
-    cb::C, sym::Symbol, f::F, x...
-) where {C,F}
+Zygote.@adjoint function callback(cb::C, sym::Symbol, f::F, x...) where {C,F}
     y, pullback = Zygote._pullback(__context__, f, x...)
     cb(sym)
     function callback_pullback(Δ...)
@@ -178,7 +180,10 @@ function dlrm(
     @assert iszero(mod(sparse_feature_size * num_features, bottom_out_size))
     pre_triangle_size = div(sparse_feature_size * num_features, bottom_out_size) + 1
 
-    top_layer_input_size = div(pre_triangle_size^2 - pre_triangle_size, 2) + bottom_out_size
+    top_layer_input_size = up_to_mul_of(
+        div(pre_triangle_size^2 - pre_triangle_size, 2) + bottom_out_size,
+        POST_INTERACTION_PAD_TO_MUL,
+    )
     top_mlp_sizes = vcat([top_layer_input_size], top_mlp_sizes)
     top_mlp = create_mlp(top_mlp_sizes, lastindex(top_mlp_sizes); weight_init = weight_init)
 

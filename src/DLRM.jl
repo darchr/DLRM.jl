@@ -21,6 +21,7 @@ using DataStructures: DataStructures
 using Flux: Flux
 using HDF5: HDF5
 using NaturalSort: NaturalSort
+using Polyester: Polyester
 using ProgressMeter: ProgressMeter
 import UnPack: @unpack
 import Zygote
@@ -48,20 +49,38 @@ macro setup()
     return quote
         using DLRM, Zygote, Flux, HDF5, CachedArrays, OneDNN
         manager = CachedArrays.CacheManager(
-            "/mnt/pm1/public/";
+            CachedArrays.AlignedAllocator(),
+            CachedArrays.MmapAllocator("/mnt/pm1/public/");
             localsize = 50_000_000_000,
             remotesize = 100_000_000_000,
+            minallocation = 21,
             #telemetry = CachedArrays.Telemetry(),
         )
         CachedArrays.materialize_os_pages!(manager.local_heap)
+
+        # weight_init = function (x...)
+        #     data = DLRM.tocached(manager)(x...)
+        #     DLRM._Model.multithread_init(DLRM._Model.GlorotNormal(), data)
+        #     return data
+        # end
+
+        # tables = DLRM._Model.create_embeddings(
+        #     # Embedding Constructor
+        #     DLRM.SimpleEmbedding{DLRM.Static{128}},
+        #     # Sparse feature size
+        #     128,
+        #     # Embedding Sizes
+        #     fill(1_000_000, 26),
+        #     # Initializer
+        #     weight_init,
+        # )
         model = DLRM.kaggle_dlrm(DLRM.tocached(manager))
         data = DLRM.load(DLRM.DAC(), "/mnt/data1/dac/train.bin")
         loader = DLRM.DACLoader(
-            #data, 2^15; allocator = DLRM.tocached(manager, CachedArrays.ReadWrite())
-            data, 2048; allocator = DLRM.tocached(manager, CachedArrays.ReadWrite())
-        )
+            data, 2^15; allocator = DLRM.tocached(manager, CachedArrays.ReadWrite())
+        );
         loss = DLRM._Train.wrap_loss(
-            DLRM._Train.bce_loss; strategy = DLRM.PreallocationStrategy(128)
+            DLRM._Train.bce_loss; strategy = DLRM.SimpleParallelStrategy()
         )
         opt = Flux.Descent(0.1)
     end |> esc
@@ -125,12 +144,18 @@ end
 end
 
 const MaybeTranspose{T} = Union{T,LinearAlgebra.Transpose{<:Any,<:T}}
-@annotate function OneDNN.MemoryPtr(x::MaybeTranspose{<:UnreadableCachedArray}, desc)
+@annotate function OneDNN._MemoryPtr(x::MaybeTranspose{<:UnreadableCachedArray}, desc)
     return __recurse__(__readable__(x), desc)
 end
 
 @annotate function _EmbeddingTables.lookup!(
     O, A::SimpleEmbedding{S,T,<:UnreadableCachedArray}, I::AbstractVector{<:Integer}
+) where {S,T,N}
+    return __recurse__(O, __readable__(A), I)
+end
+
+@annotate function _EmbeddingTables.lookup!(
+    O, A::SimpleEmbedding{S,T,<:UnreadableCachedArray}, I::AbstractMatrix{<:Integer}
 ) where {S,T,N}
     return __recurse__(O, __readable__(A), I)
 end
@@ -149,6 +174,7 @@ end
 # However, we need to clean up the `__readable__` call to avoid creating an entire new array
 # and instead just use a CachedArray callback to save on some allocations.
 @annotate function OneDNN.access_pointer(x::UnreadableCachedArray, offset, ::OneDNN.Reading)
+
     return pointer(__readable__(x), offset)
 end
 
@@ -165,6 +191,12 @@ end
     x::UnreadableCachedArray, ys::ReadableCachedArray; kw...
 )
     return dot(__readable__(x), ys; kw...)
+end
+
+@annotate function (dot::_Model.DotInteraction)(
+    x::UnreadableCachedArray, ys::Vector{<:UnreadableCachedArray}; kw...
+)
+    return dot(__readable__(x), __readable__.(ys); kw...)
 end
 
 @annotate function ChainRulesCore.rrule(

@@ -1,6 +1,6 @@
 module _Train
 
-export bce_loss
+export bce_loss, wrap_loss, train!
 
 # stdlib
 using Statistics
@@ -171,9 +171,11 @@ function train!(loss, model, data, opt; cb = () -> (), maxiters = nothing)
     grads = DLRMGrads(model)
     cb = runall(cb)
 
-    count = 1
+    count = 0
     telemetry = __cb(loss)
-    ProgressMeter.@showprogress 1 for d in data
+    #ProgressMeter.@showprogress 1 for d in data
+    println("Starting Training Loop")
+    for d in data
         telemetry(:start)
         _grads = Zygote.gradient(loss, model, d...)
         telemetry(:grads_done)
@@ -216,6 +218,7 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     index_translation = params.weight_index_translations
 
     Polyester.@batch per = core for i in Base.OneTo(len)
+    #for i in Base.OneTo(len)
         if i <= m
             Flux.update!(
                 opt,

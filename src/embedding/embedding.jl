@@ -16,6 +16,7 @@ using .._Utils
 # deps
 import ChainRulesCore
 import Flux
+import ManualMemory
 import Polyester
 import SIMD
 import StaticArrays: SVector

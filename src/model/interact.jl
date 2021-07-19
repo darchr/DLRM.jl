@@ -22,10 +22,10 @@ end
 
 self_batched_mul_reference(x) = NNlib.batched_mul(NNlib.batched_transpose(x), x)
 
-_colons(::Val{N}) where {N} = ntuple(_ -> :, Val(N-2))
+_colons(::Val{N}) where {N} = ntuple(_ -> :, Val(N))
 function triangular_slice_reference(x::AbstractArray{T,N}) where {T,N}
     xflat = map(2:size(x, 2)) do i
-        view(x, 1:(i - 1), i, _colons(Val(N))...)
+        view(x, 1:(i - 1), i, _colons(Val(N - 2))...)
     end
     return vcat(xflat...)
 end
@@ -101,10 +101,7 @@ julia> x
  0  0  0
 ```
 """
-function triangular_slice_back_kernel!(
-    x::AbstractMatrix{T},
-    y::AbstractVector
-) where {T}
+function triangular_slice_back_kernel!(x::AbstractMatrix{T}, y::AbstractVector) where {T}
     @inbounds for j in axes(x, 2), i in axes(x, 1)
         if i >= j
             v = zero(T)
@@ -184,7 +181,7 @@ function triangular_slice(X::AbstractArray{T,3}) where {T}
     ncols = div((sz * sz) - sz, 2)
 
     O = similar(X, eltype(X), ncols, batchsize)
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per = core for batch in Base.OneTo(batchsize)
         vX = view(X, :, :, batch)
         vO = view(O, :, batch)
         triangular_slice_kernel!(vO, vX)
@@ -197,7 +194,7 @@ end
 function triangular_slice_back(Δ::AbstractMatrix, sz::NTuple{3,Int})
     A = similar(Δ, eltype(Δ), sz)
     batchsize = sz[3]
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per = core for batch in Base.OneTo(batchsize)
         vA = view(A, :, :, batch)
         vΔ = view(Δ, :, batch)
         triangular_slice_back_kernel!(vA, vΔ)
@@ -210,8 +207,7 @@ function ChainRulesCore.rrule(::typeof(triangular_slice), x)
     sz = size(x)
     function triangular_slice_pullback(Δ)
         return (
-            ChainRulesCore.NoTangent(),
-            triangular_slice_back(OneDNN.materialize(Δ), sz),
+            ChainRulesCore.NoTangent(), triangular_slice_back(OneDNN.materialize(Δ), sz)
         )
     end
     return triangular_slice(x), triangular_slice_pullback
@@ -221,18 +217,51 @@ end
 ##### Optimized Concatenation
 #####
 
+# """
+# $(TYPEDSIGNATURES)
+#
+# Quickly concatenate `x` and all elements of `ys` along axis 1.
+# """
+# function fast_vcat(x::MemoryAround{A}, ys::AbstractVector{A}) where {A}
+#     z = OneDNN.Memory.(ys)
+#     #z = [OneDNN.Memory(i)::typeof(x) for i in ys]
+#     pushfirst!(z, x)
+#     return OneDNN.concat(z, 1)
+# end
 
-"""
-$(TYPEDSIGNATURES)
+#####
+##### LazyVcat
+#####
 
-Quickly concatenate `x` and all elements of `ys` along axis 1.
-"""
-function fast_vcat(x::MemoryAround{A}, ys::AbstractVector{A}) where {A}
-    z = OneDNN.Memory.(ys)
-    #z = [OneDNN.Memory(i)::typeof(x) for i in ys]
-    pushfirst!(z, x)
-    return OneDNN.concat(z, 1)
+struct LazyVcat{T}
+    args::Vector{T}
 end
+
+Base.reshape(x::LazyVcat, dims) = LazyVcat(map(x -> reshape(x, dims), x.args))
+height(x::AbstractArray) = size(x, 2)
+height(x::LazyVcat) = sum(height, x.args)
+featuresize(x::LazyVcat) = size(first(x.args), 1)
+
+getslice(x::AbstractArray{T,N}, i) where {T,N} = view(x, _colons(Val(N - 1))..., i)
+function getslice(x::LazyVcat, i)
+    for array in x.args
+        h = height(array)
+        h <= i && return getslice(array, i)
+        i -= h
+    end
+    return error("Out of Bounds")
+end
+
+function fast_vcat(x::MemoryAround{A}, ys::AbstractVector{A}) where {A}
+    return fast_vcat(OneDNN.materialize(x), ys)
+end
+
+function fast_vcat(x::A, ys::AbstractVector{A}) where {A}
+    pushfirst!(ys, OneDNN.materialize(x))
+    return LazyVcat(ys)
+end
+
+_batchsize(x::LazyVcat) = size(first(x.args), 3)
 
 # Implementation note - the forward pass combines many different arrays into a single
 # large array.
@@ -240,9 +269,7 @@ end
 # Thus, the pullback will recieve one large array.
 # Views into this array are returned on the backward to avoid unnecessary copies.
 # If a copy is indeed needed, the view can always be `collect`ed.
-function ChainRulesCore.rrule(
-        ::typeof(fast_vcat), x::MemoryAround{A}, ys::AbstractVector{A}
-) where {A}
+function ChainRulesCore.rrule(::typeof(fast_vcat), x::A, ys::AbstractVector{A}) where {A}
     xsize = size(x, 1)
     ysizes = size.(ys, 1)
     out = fast_vcat(x, ys)
@@ -337,11 +364,12 @@ function sumavx(a, b)
 end
 
 function process_slice!(
-    dst::AbstractVector,
+    dst::AbstractVector{T},
     src::AbstractMatrix,
     concat::AbstractVector,
+    padding_amount::Int = 0,
     scratch = similar(src, size(src, 2), size(src, 2)),
-)
+) where {T}
     # First, perform the concatenation step
     # TODO: Is there a good way to abstract this?
     LoopVectorization.@turbo for i in Base.OneTo(length(concat))
@@ -351,7 +379,17 @@ function process_slice!(
     # Then, perform the self matrix multiplication and triangular slice operation.
     gemmavx!(scratch, transpose(src), src)
     offset = length(concat) + 1
-    triangular_slice_kernel!(view(dst, offset:length(dst)), scratch)
+    dst_length = length(dst)
+    triangular_slice_kernel!(view(dst, offset:(dst_length - padding_amount)), scratch)
+
+    # Zero out any extra padding we may have applied.
+    if !iszero(padding_amount)
+        v = view(dst, (dst_length - padding_amount + 1):dst_length)
+        for i in eachindex(v)
+            @inbounds v[i] = zero(T)
+        end
+    end
+
     return nothing
 end
 
@@ -381,11 +419,11 @@ function init!(x::DotInteraction{T}, sz1, sz2 = sz1) where {T}
     return nothing
 end
 
-function (dot::DotInteraction)(x::OneDNN.Memory, ys::AbstractMatrix; kw...)
+function (dot::DotInteraction)(x::OneDNN.Memory, ys; kw...)
     return dot(OneDNN.materialize(x), ys; kw...)
 end
 
-function (dot::DotInteraction)(x::AbstractMatrix, ys::AbstractMatrix; return_t = false)
+function (dot::DotInteraction)(x::AbstractMatrix, ys; training = false)
     d, batchsize = size(x)
     combined = fast_vcat(x, ys)
     T = reshape(combined, (d, :, batchsize))
@@ -393,12 +431,12 @@ function (dot::DotInteraction)(x::AbstractMatrix, ys::AbstractMatrix; return_t =
     # The "reshape" function should create a new array sharing memory with the old array.
     # This should work for both normal arrays and CachedArrays.
     @assert !isa(T, Base.ReshapedArray)
-    out = process_batches(dot, T, x)
+    out, padding = process_batches(dot, T, x)
 
     # Rely on constant propagation to optimize out any instability caused by
     # the contidional return type.
-    if return_t
-        return out, T
+    if training
+        return out, T, padding
     else
         return out
     end
@@ -406,10 +444,10 @@ end
 
 # Define a custom pullback to vectorize the accumulation of "X".
 # Otherwrise, the accumulation is single threaded.
-function dot_back(dot::DotInteraction, Δ, T, xlen)
-    batchsize = size(T, 3)
+function dot_back(dot::DotInteraction, Δ, T, xlen, ysizes, padding)
+    batchsize = _batchsize(T)
 
-    dx1, dt = process_batches_back(dot, Δ, T, xlen)
+    dx1, dt = process_batches_back(dot, Δ, T, xlen, padding)
     dt_reshaped = reshape(dt, :, batchsize)
 
     # Reverse the concatenation process.
@@ -417,54 +455,63 @@ function dot_back(dot::DotInteraction, Δ, T, xlen)
 
     # Finally, we need to add together both the contributions to the "x" input.
     dx = sumavx(dx1, dx2)
-    return dx, dt_reshaped
+    f = Slicer(1, 1, dt_reshaped)
+    return dx, map(f, ysizes)
 end
 
-function ChainRulesCore.rrule(dot::DotInteraction, X, Y::AbstractMatrix)
-    forward, t = dot(X, Y; return_t = true)
+function ChainRulesCore.rrule(dot::DotInteraction, X, Y)
+    forward, t, padding = dot(X, Y; training = true)
     xlen = size(X, 1)
+    ysizes = size.(Y, 1)
 
     function dot_pullback(Δ)
-        dx, dy = dot_back(dot, Δ, t, xlen)
+        dx, dy = dot_back(dot, Δ, t, xlen, ysizes, padding)
         return (ChainRulesCore.NoTangent(), dx, dy)
     end
     return forward, dot_pullback
 end
 
 function process_batches(dot::DotInteraction, T, x)
-    sz = size(T, 2)
+    sz = height(T)
     offset, batchsize = size(x)
 
-    dst = similar(x, eltype(x), (div(sz^2 - sz, 2) + offset, batchsize))
+    # Round so that the size along the smallest dimension is a multiple of 16.
+    unpadded_size = div(sz^2 - sz, 2) + offset
+    padded_size = up_to_mul_of(unpadded_size, POST_INTERACTION_PAD_TO_MUL)
+    padding_amount = padded_size - unpadded_size
+
+    dst = similar(x, eltype(x), (padded_size, batchsize))
     init!(dot, sz)
 
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
-        vT = view(T, :, :, batch)
-        vdst = view(dst, :, batch)
-        vx = view(x, :, batch)
-        process_slice!(vdst, vT, vx, dot[])
+    Polyester.@batch per = core for batch in Base.OneTo(batchsize)
+        vT = getslice(T, batch)
+        vdst = getslice(dst, batch)
+        vx = getslice(x, batch)
+        process_slice!(vdst, vT, vx, padding_amount, dot[])
     end
-    return dst
+    return dst, padding_amount
 end
 
-function process_batches_back(dot::DotInteraction, Δ::AbstractMatrix{T}, t, xlen) where {T}
+function process_batches_back(
+    dot::DotInteraction, Δ::AbstractMatrix{T}, t, xlen, padding
+) where {T}
     # Take two view, one view is the concatenated version of "x" and the other will be
     # fed back to reverse the slicing process.
     batchsize = size(Δ, 2)
     dx = view(Δ, Base.OneTo(xlen), :)
-    remainder = view(Δ, (xlen + 1):size(Δ, 1), :)
+    remainder = view(Δ, (xlen + 1):(size(Δ, 1) - padding), :)
 
-    dt = similar(Δ, T, size(t))
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    dt = similar(Δ, T, (featuresize(t), height(t), _batchsize(t)))
+    Polyester.@batch per = core for batch in Base.OneTo(batchsize)
         # Now, reverse the triangular slice
         scratch = dot[]
 
-        vΔ = view(remainder, :, batch)
+        vΔ = getslice(remainder, batch)
         triangular_slice_back_fuse_add_transpose_kernel!(scratch, vΔ)
 
         # Reverse the matrix multiplication.
-        vdt = view(dt, :, :, batch)
-        vt = view(t, :, :, batch)
+        vdt = getslice(dt, batch)
+        vt = getslice(t, batch)
         gemmavx!(vdt, vt, scratch)
     end
     return dx, dt
