@@ -30,7 +30,8 @@ end
 #####
 
 function Flux.Optimise.update!(opt, x, xbar::SparseEmbeddingUpdate, args...)
-    return Flux.update!(x, Flux.Optimise.apply!(opt, x, xbar, args...)...)
+    tup = Flux.Optimise.apply!(opt, x, xbar, args...)
+    return Flux.update!(x, tup...)
 end
 
 # Prepare the SparseEmbeddingUpdate by first crunching it so we have less to write

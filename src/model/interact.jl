@@ -16,8 +16,13 @@ function dot_interaction_reference(X, Ys)
     # Triangular slice
     Zflat = triangular_slice_reference(Z)
 
+    sz = size(Zflat, 1)
+    padded_size = up_to_mul_of(sz, POST_INTERACTION_PAD_TO_MUL)
+    padding_amount = padded_size - sz
+    pad = zeros(eltype(Zflat), padding_amount, size(Zflat, 2))
+
     # Concat
-    return vcat(X, Zflat)
+    return vcat(X, Zflat, pad)
 end
 
 self_batched_mul_reference(x) = NNlib.batched_mul(NNlib.batched_transpose(x), x)
@@ -29,6 +34,7 @@ function triangular_slice_reference(x::AbstractArray{T,N}) where {T,N}
     end
     return vcat(xflat...)
 end
+
 
 #####
 ##### Triangular slicing methods.
@@ -246,19 +252,23 @@ getslice(x::AbstractArray{T,N}, i) where {T,N} = view(x, _colons(Val(N - 1))...,
 function getslice(x::LazyVcat, i)
     for array in x.args
         h = height(array)
-        h <= i && return getslice(array, i)
+        if h <= i
+            result = getslice(array, i)
+            return result
+        end
         i -= h
     end
     return error("Out of Bounds")
 end
 
-function fast_vcat(x::MemoryAround{A}, ys::AbstractVector{A}) where {A}
-    return fast_vcat(OneDNN.materialize(x), ys)
+function fast_vcat(x::MemoryAround{A}, ys::AbstractVector{A}, docopy = false) where {A}
+    return fast_vcat(OneDNN.materialize(x), ys, docopy)
 end
 
-function fast_vcat(x::A, ys::AbstractVector{A}) where {A}
-    pushfirst!(ys, OneDNN.materialize(x))
-    return LazyVcat(ys)
+function fast_vcat(x::A, ys::AbstractVector{A}, docopy = false) where {A}
+    _ys = docopy ? copy(ys) : ys
+    pushfirst!(_ys, OneDNN.materialize(x))
+    return LazyVcat(_ys)
 end
 
 _batchsize(x::LazyVcat) = size(first(x.args), 3)
@@ -269,10 +279,12 @@ _batchsize(x::LazyVcat) = size(first(x.args), 3)
 # Thus, the pullback will recieve one large array.
 # Views into this array are returned on the backward to avoid unnecessary copies.
 # If a copy is indeed needed, the view can always be `collect`ed.
-function ChainRulesCore.rrule(::typeof(fast_vcat), x::A, ys::AbstractVector{A}) where {A}
+function ChainRulesCore.rrule(
+    ::typeof(fast_vcat), x::A, ys::AbstractVector{A}, docopy = false
+) where {A}
     xsize = size(x, 1)
     ysizes = size.(ys, 1)
-    out = fast_vcat(x, ys)
+    out = fast_vcat(x, ys, docopy)
 
     function fast_vcat_pullback(Δ)
         Δmaterialized = OneDNN.materialize(Δ; allowreorder = false)
@@ -283,7 +295,7 @@ function ChainRulesCore.rrule(::typeof(fast_vcat), x::A, ys::AbstractVector{A}) 
         f = Slicer(xsize + 1, 1, Δmaterialized)
         δys = map(f, ysizes)
 
-        return (ChainRulesCore.NoTangent(), δx, δys)
+        return (ChainRulesCore.NoTangent(), δx, δys, ChainRulesCore.NoTangent())
     end
 
     return out, fast_vcat_pullback
@@ -426,7 +438,7 @@ end
 function (dot::DotInteraction)(x::AbstractMatrix, ys; training = false)
     d, batchsize = size(x)
     combined = fast_vcat(x, ys)
-    T = reshape(combined, (d, :, batchsize))
+    T = reshape(combined, (d, length(ys), :))
 
     # The "reshape" function should create a new array sharing memory with the old array.
     # This should work for both normal arrays and CachedArrays.
@@ -435,6 +447,9 @@ function (dot::DotInteraction)(x::AbstractMatrix, ys; training = false)
 
     # Rely on constant propagation to optimize out any instability caused by
     # the contidional return type.
+    #CachedArrays.softevict!(x)
+    #foreach(CachedArrays.softevict!, ys)
+
     if training
         return out, T, padding
     else

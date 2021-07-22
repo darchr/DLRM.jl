@@ -6,15 +6,21 @@ export DLRMModel, dlrm
 using .._EmbeddingTables
 using .._Utils
 
+# local deps
+using CachedArrays: CachedArrays
+
 # deps
-using ChainRulesCore: ChainRulesCore
-using Flux: Flux
-using LoopVectorization: LoopVectorization
-using NNlib: NNlib
-using OneDNN: OneDNN
-using Polyester: Polyester
-using ProgressMeter: ProgressMeter
-using Zygote: Zygote
+import ChainRulesCore
+import DataStructures
+import Flux
+import LoopVectorization
+import ManualMemory
+import NNlib
+import OneDNN
+import Polyester
+import ProgressMeter
+import UnPack: @unpack
+import Zygote
 
 # DocStringExtensions
 using DocStringExtensions
@@ -24,6 +30,7 @@ cdiv(x, y) = 1 + div(x - 1, y)
 up_to_mul_of(x, y) = y * cdiv(x, y)
 
 include("interact.jl")
+include("embedding_update.jl")
 
 # Strategy:
 # We can take advantage of Julia's dynamic typing to build the intermediate parts of the

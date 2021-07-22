@@ -2,7 +2,7 @@ module _EmbeddingTables
 
 # types
 export AbstractEmbeddingTable, SimpleEmbedding, SplitEmbedding
-export SparseEmbeddingUpdate, Static
+export SparseEmbeddingUpdate, UpdatePartitioner, Static
 
 # functions
 export lookup, maplookup
@@ -12,9 +12,11 @@ export DefaultStrategy, SimpleParallelStrategy, PreallocationStrategy
 
 # local deps
 using .._Utils
+import CachedArrays
 
 # deps
 import ChainRulesCore
+import DataStructures
 import Flux
 import ManualMemory
 import Polyester
@@ -30,6 +32,7 @@ import Zygote
 #
 # This provides an entry point for developing strategies specialized for PMM
 abstract type AbstractExecutionStrategy end
+const VecOrMat{T} = Union{<:AbstractVector{T}, <:AbstractMatrix{T}}
 
 #####
 ##### Embedding Table API
@@ -79,7 +82,9 @@ end
 @inline columnview(A::AbstractMatrix, i) = view(A, 1:size(A, 1), i)
 
 # Interface
+function lookup end
 include("simd.jl")
+include("sparseupdate.jl")
 include("lookup.jl")
 include("update.jl")
 

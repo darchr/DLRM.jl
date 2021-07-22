@@ -4,6 +4,38 @@
 
 @testset "Testing Interaction" begin
 
+    @testset "Testing Utilities" begin
+        # gemmavx!
+        Random.seed!(1234)
+        for _ = 1:100
+            x = rand(Float32, rand(10:100), rand(10:100))
+            xt = transpose(x)
+            y = similar(x, size(x, 1), size(x, 1))
+
+            DLRM._Model.gemmavx!(y, x, xt)
+            @test y == x * xt
+        end
+
+        # sumavx
+        # Pass in some exotic types to try to trip up LoopVectorization
+        x = rand(Float32, 128, 128)
+        vx = view(x, 1:12, :)
+        vtx = view(transpose(x), 1:12, :)
+        y = DLRM._Model.sumavx(vx, vtx)
+        @test y == vx + vtx
+
+        # process slice.
+        # TODO: Better utilities for generating arrays of the correct size ...
+        _len = div(100 * (100 - 1), 2)
+        dst = Vector{Float32}(undef, 10 + _len)
+        concat = rand(Float32, 10)
+        src = rand(Float32, 128, 100)
+        DLRM._Model.process_slice!(dst, src, concat)
+
+        ref = vcat(concat, DLRM._Model.triangular_slice_reference(transpose(src) * src))
+        @test isapprox(ref, dst)
+    end
+
     @testset "Testing Triangular Slicing" begin
         # Test docstring examples
         x = [
@@ -87,73 +119,47 @@
         x = OneDNN.Memory(rand(Float32, 128, 128))
         ys = [rand(Float32, 128, 128) for _ = 1:20]
 
-        z = DLRM._Model.fast_vcat(x, ys)
-        @inferred DLRM._Model.fast_vcat(x, ys)
+        z = DLRM._Model.fast_vcat(x, ys, true)
+        @test length(ys) == 20
+        @test isa(z, DLRM._Model.LazyVcat)
+
+        @inferred DLRM._Model.fast_vcat(x, ys, true)
         mycat(x, ys) = vcat(OneDNN.materialize(x), reduce(vcat, ys))
-        @test OneDNN.materialize(z) == mycat(x, ys)
+        @test reduce(vcat, z.args) == mycat(x, ys)
 
         # Check pullbacks
-        z, back = Zygote._pullback(DLRM._Model.fast_vcat, x, ys)
+        z, back = Zygote._pullback(DLRM._Model.fast_vcat, x, ys, true)
         z_ref, back_ref = Zygote._pullback(mycat, x, ys)
 
-        @test OneDNN.materialize(z) == z_ref
+        @test isa(z, DLRM._Model.LazyVcat)
+        @test reduce(vcat, z.args) == z_ref
 
-        dx = back(z)
-        dx_ref = back_ref(z_ref)
+        Δ = rand(Float32, size(z_ref))
+        dx = back(Δ)
+        dx_ref = back_ref(Δ)
 
         @test dx[1] === dx_ref[1] === nothing
         @test dx[2] == dx_ref[2]
         @test all(dx[3] .== dx_ref[3])
 
-        # Optimized copy path.
-        xx = zeros(eltype(x), size(x))
-        yys = vcat(xx, reduce(vcat, ys))
-        z = DLRM._Model.fast_vcat(parent(x), yys)
-        @test z == mycat(x, ys)
+        # # Optimized copy path.
+        # xx = zeros(eltype(x), size(x))
+        # yys = vcat(xx, reduce(vcat, ys))
+        # z = DLRM._Model.fast_vcat(parent(x), yys, true)
+        # @test z == mycat(x, ys)
 
-        z, back = Zygote._pullback(DLRM._Model.fast_vcat, parent(x), yys)
-        @test z == mycat(x, ys)
-        dx = back(z)
-        @test dx[1] === nothing
-        @test dx[2] == dx_ref[2]
+        # z, back = Zygote._pullback(DLRM._Model.fast_vcat, parent(x), yys, true)
+        # @test z == mycat(x, ys)
+        # Δ = randn(Float32, size(mycat(x, ys)))
+        # dx = back(Δ)
+        # @test dx[1] === nothing
+        # @test dx[2] == dx_ref[2]
 
-        # To compare the pullbacks, we need to take an appropriate view of the large matrix
-        # returned by `fast_vcat_pullback` and concat the reference sensitivities together.
-        #
-        # It's quite a dance ...
-        @test view(dx[3], (size(x, 1) + 1):size(dx[3], 1), :) == reduce(vcat, dx_ref[3])
-    end
-
-    @testset "Testing Utilities" begin
-        # gemmavx!
-        Random.seed!(1234)
-        for _ = 1:100
-            x = rand(Float32, rand(10:100), rand(10:100))
-            xt = transpose(x)
-            y = similar(x, size(x, 1), size(x, 1))
-
-            DLRM._Model.gemmavx!(y, x, xt)
-            @test y == x * xt
-        end
-
-        # sumavx
-        # Pass in some exotic types to try to trip up LoopVectorization
-        x = rand(Float32, 128, 128)
-        vx = view(x, 1:12, :)
-        vtx = view(transpose(x), 1:12, :)
-        y = DLRM._Model.sumavx(vx, vtx)
-        @test y == vx + vtx
-
-        # process slice.
-        # TODO: Better utilities for generating arrays of the correct size ...
-        _len = div(100 * (100 - 1), 2)
-        dst = Vector{Float32}(undef, 10 + _len)
-        concat = rand(Float32, 10)
-        src = rand(Float32, 128, 100)
-        DLRM._Model.process_slice!(dst, src, concat)
-
-        ref = vcat(concat, DLRM._Model.triangular_slice_reference(transpose(src) * src))
-        @test isapprox(ref, dst)
+        # # To compare the pullbacks, we need to take an appropriate view of the large matrix
+        # # returned by `fast_vcat_pullback` and concat the reference sensitivities together.
+        # #
+        # # It's quite a dance ...
+        # @test view(dx[3], (size(x, 1) + 1):size(dx[3], 1), :) == reduce(vcat, dx_ref[3])
     end
 
     @testset "Testing DotInteraction" begin
@@ -166,17 +172,17 @@
         ys = [randn(Float32, 128, 1024) for _ = 1:10]
 
         # Construct the mimic array for the PreallocationStrategy output.
-        ys_preallocated = vcat(zeros(Float32, size(x)), reduce(vcat, ys))
-        @test size(ys_preallocated) == (size(x, 1) + sum(size.(ys, 1)), size(x, 2))
-        z = dot(x, ys_preallocated)
+        #ys_preallocated = vcat(zeros(Float32, size(x)), reduce(vcat, ys))
+        #@test size(ys_preallocated) == (size(x, 1) + sum(size.(ys, 1)), size(x, 2))
+        z = dot(x, deepcopy(ys))
         @test !isa(z, Tuple)
 
         # Test unwrapping of OneDNN.memory
-        @test z == dot(OneDNN.Memory(x), ys_preallocated)
+        @test z == dot(OneDNN.Memory(x), deepcopy(ys))
         @test isapprox(z, DLRM._Model.dot_interaction_reference(x, ys))
 
         # Test pullbacks
-        z, back = Zygote._pullback(dot, x, ys_preallocated)
+        z, back = Zygote._pullback(dot, x, deepcopy(ys))
         z_ref, back_ref = Zygote._pullback(DLRM._Model.dot_interaction_reference, x, ys)
         @test isapprox(z, z_ref)
 

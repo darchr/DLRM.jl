@@ -67,11 +67,8 @@ function emit_update(::Type{T}, numelements::Integer) where {T}
         for (src_col, dst_col) in enumerate(view(xbar.indices, Base.OneTo(numcols)))
             src_ptr = columnpointer(src, src_col)
             dst_ptr = columnpointer(dst, dst_col)
-            $(generate_moveto(T, numelements, true; injector = emit_sub))
+            $(generate_moveto(T, numelements, false; injector = emit_sub))
         end
-        # Since we're using non-temporal stores - ensure all stores are visible before
-        # exiting the update function.
-        sfence()
     end
 end
 

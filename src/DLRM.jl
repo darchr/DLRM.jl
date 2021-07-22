@@ -126,6 +126,9 @@ const UnreadableMemory = MemoryAround{UnreadableCachedArray}
 
 CachedArrays.@wrapper OneDNN.Memory array
 CachedArrays.@wrapper SimpleEmbedding data
+
+CachedArrays.@wrapper _EmbeddingTables.SparseEmbeddingUpdate (unsafe_free,) delta
+
 function CachedArrays.constructorof(::Type{<:SimpleEmbedding{Static{N}}}) where {N}
     return SimpleEmbedding{Static{N}}
 end
@@ -174,13 +177,14 @@ end
 # However, we need to clean up the `__readable__` call to avoid creating an entire new array
 # and instead just use a CachedArray callback to save on some allocations.
 @annotate function OneDNN.access_pointer(x::UnreadableCachedArray, offset, ::OneDNN.Reading)
-
     return pointer(__readable__(x), offset)
 end
 
 @annotate function OneDNN.access_pointer(x::UnwritableCachedArray, offset, ::OneDNN.Writing)
     return pointer(__writable__(x), offset)
 end
+
+
 
 # Capture memories coming out of OneDNN kernels and convert them to "NotBusy".
 @annotate function OneDNN.kernel_exit_hook(x::MemoryAround{CachedArray})
