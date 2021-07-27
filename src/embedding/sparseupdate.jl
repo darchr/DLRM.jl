@@ -2,6 +2,11 @@
 ##### Embedding Updates
 #####
 
+# Compress all updates for each column in place.
+# The updates to the final embedding table can then all be performed at once.
+_maybe_columnview(x::AbstractVector, i) = x[i]
+_maybe_columnview(x::AbstractMatrix, i) = columnview(x, i)
+
 # A sparse updater for embedding tables.
 struct SparseEmbeddingUpdate{S<:AbstractLookupType,A<:AbstractMatrix,I<:AbstractArray}
     delta::A
@@ -14,9 +19,7 @@ end
 
 # Convert the compressed representations
 function uncompress(
-    x::SparseEmbeddingUpdate,
-    dstcols = maximum(x.indices);
-    maxindices = length(x.indices),
+    x::SparseEmbeddingUpdate, dstcols = maximum(x.indices); maxindices = length(x.indices)
 )
     @unpack indices, delta = x
     dst = zeros(eltype(delta), size(delta, 1), dstcols)
@@ -25,17 +28,11 @@ function uncompress(
         for c in _maybe_columnview(indices, column)
             columnview(dst, c) .+= update
         end
-
         count += 1
         count == maxindices && break
     end
     return dst
 end
-
-# Compress all updates for each column in place.
-# The updates to the final embedding table can then all be performed at once.
-_maybe_columnview(x::AbstractVector, i) = x[i]
-_maybe_columnview(x::AbstractMatrix, i) = columnview(x, i)
 
 function crunch(
     src::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
@@ -165,7 +162,6 @@ end
 
 _maybeslice(x::AbstractVector, range) = view(x, range)
 _maybeslice(x::AbstractMatrix, range) = view(x, :, range)
-
 
 function Base.iterate(x::UpdatePartitioner{S,A,I}, _ = nothing) where {S,A,I}
     @unpack update, base, batchsize = x

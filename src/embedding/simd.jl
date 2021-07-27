@@ -1,7 +1,6 @@
 # Set to 64 for AVX-512
 # Set to 32 for AVX2
 # TODO: At some point, make this automatic?
-
 function sfence()
     str = raw"""
         tail call void asm sideeffect "sfence", "~{memory},~{dirflag},~{fpsr},~{flags}"()

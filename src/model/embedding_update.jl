@@ -40,6 +40,7 @@ mutable struct BatchUpdater
     # critical at this level.
     writeback_queue::DataStructures.CircularBuffer{Any}
     writeback_queue_lock::ReentrantLock
+    tmplock::ReentrantLock
 
     # Control elements for dividing up work.
     current_index::Int
@@ -51,6 +52,7 @@ function BatchUpdater(queue_length = 500)
     return BatchUpdater(
         # Writeback Queue
         DataStructures.CircularBuffer{Any}(queue_length),
+        ReentrantLock(),
         ReentrantLock(),
         # Control for process queue,
         1,
@@ -83,11 +85,17 @@ end
 
 function grabwork(updater::BatchUpdater, tables, updates)
     # Fast path, if work is completed, simply return.
-    @unpack done = updater
-    done && return nothing
+    updater.done && return nothing
 
-    @unpack current_index, table_update_queue_lock = updater
-    update = Base.@lock table_update_queue_lock begin
+    @unpack table_update_queue_lock = updater
+    update, index = Base.@lock table_update_queue_lock begin
+        # We could have finished between the first check and acquiring the lock,
+        # so check again to make sure.
+        updater.done && return nothing
+
+        # Need to access this only after we acquire the lock.
+        @unpack current_index = updater
+
         # Check to see if there's any work available in the current table.
         current_iter = updates[current_index]
         sparse_update = iterate(current_iter)
@@ -103,15 +111,16 @@ function grabwork(updater::BatchUpdater, tables, updates)
 
             # We haven't exhausted everything.
             # Increment the current index and try again.
-            sparse_update = iterate(updates[current_index + 1])
+            current_index += 1
+            sparse_update = iterate(updates[current_index])
             sparse_update === nothing && error("Expected this to work!!")
 
-            updater.current_index = current_index + 1
+            updater.current_index = current_index
         end
-        sparse_update
+        sparse_update, current_index
     end
 
-    table = tables[updater.current_index]
+    table = tables[index]
     return (; table, update)
 end
 
@@ -174,7 +183,6 @@ function writeback_task(updater::BatchUpdater, args...)
         if work === nothing
             # Check if we're done and exit if so.
             updater.done && return nothing
-
             success = _process_task(updater, args...)
             # If "success" is false, then the last bits of data are being processed.
             # Wait a little bit to give other threads a chance to finish.
@@ -182,7 +190,7 @@ function writeback_task(updater::BatchUpdater, args...)
                 sleep(0.001)
             end
         else
-            success = _writeback_task(work...)
+            _writeback_task(work...)
         end
     end
 end

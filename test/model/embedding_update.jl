@@ -22,7 +22,7 @@
 
     out, back = Zygote._pullback(
         DLRM.maplookup,
-        DLRM.SimpleParallelStrategy(),
+        DLRM.PreallocationStrategy(),
         tables,
         indices,
     )
@@ -30,7 +30,7 @@
     # Now, generate a reference result.
     f = (_tables, _indices) -> mapreduce(DLRM.lookup, vcat, _tables, _indices)
     out_reference, back_reference = Zygote._pullback(f, tables_reference, indices_reference)
-    @test isapprox(reduce(vcat, out), out_reference)
+    @test isapprox(out, out_reference)
 
     # Just feed back the results to get the correct updates.
     updates = back(out)

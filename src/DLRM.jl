@@ -80,7 +80,8 @@ macro setup()
             data, 2^15; allocator = DLRM.tocached(manager, CachedArrays.ReadWrite())
         );
         loss = DLRM._Train.wrap_loss(
-            DLRM._Train.bce_loss; strategy = DLRM.SimpleParallelStrategy()
+            #DLRM._Train.bce_loss; strategy = DLRM.SimpleParallelStrategy()
+            DLRM._Train.bce_loss; strategy = DLRM.PreallocationStrategy(128)
         )
         opt = Flux.Descent(0.1)
     end |> esc

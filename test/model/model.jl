@@ -7,7 +7,7 @@ function makefunction()
         [1024, 1024, 1024, 1],
         64,
         [100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000];
-        interaction = DLRM._Model.dot_interaction,
+        interaction = DLRM._Model.DotInteraction(),
     )
 
     return f = (d, s, e) -> Flux.mse(dlrm(d, s), e), dlrm
