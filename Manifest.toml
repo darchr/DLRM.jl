@@ -38,12 +38,6 @@ version = "0.1.0"
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
-[[BenchmarkTools]]
-deps = ["JSON", "Logging", "Printf", "Statistics", "UUIDs"]
-git-tree-sha1 = "c31ebabde28d102b602bada60ce8922c266d205b"
-uuid = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
-version = "1.1.1"
-
 [[Blosc]]
 deps = ["Blosc_jll"]
 git-tree-sha1 = "84cf7d0f8fd46ca6f1b3e0305b4b4a37afe50fd6"
@@ -68,15 +62,10 @@ uuid = "052768ef-5323-5732-b1bb-66c8b64840ba"
 version = "3.3.4"
 
 [[CachedArrays]]
-deps = ["ArrayInterface", "Cassette", "ConstructionBase", "DataStructures", "Dates", "Distributions", "DocStringExtensions", "JSON", "LLVM", "LibGit2", "Libdl", "LinearAlgebra", "MacroTools", "Mmap", "Polyester", "ProgressMeter", "Random", "SIMD", "TimerOutputs"]
+deps = ["ArrayInterface", "ConstructionBase", "DataStructures", "Dates", "Distributions", "DocStringExtensions", "JSON", "LLVM", "LibGit2", "Libdl", "LinearAlgebra", "MacroTools", "Mmap", "Polyester", "ProgressMeter", "Random", "SIMD", "TimerOutputs"]
 path = "../CachedArrays"
 uuid = "ab676e89-bb37-4f49-b167-74749319f3dc"
 version = "0.1.0"
-
-[[Cassette]]
-git-tree-sha1 = "087e76b8d48c014112ba890892c33be42ad10504"
-uuid = "7057c7e9-c182-5462-911a-8362d720325c"
-version = "0.3.7"
 
 [[ChainRules]]
 deps = ["ChainRulesCore", "Compat", "LinearAlgebra", "Random", "Statistics"]
@@ -202,6 +191,12 @@ version = "0.8.5"
 [[Downloads]]
 deps = ["ArgTools", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+
+[[EmbeddingTables]]
+deps = ["CachedArrays", "ChainRulesCore", "DataStructures", "Flux", "ManualMemory", "Polyester", "Random", "SIMD", "StaticArrays", "UnPack", "Zygote"]
+path = "../EmbeddingTables"
+uuid = "c151d800-c36a-44cc-9e8c-19173c45605f"
+version = "0.1.0"
 
 [[ExprTools]]
 git-tree-sha1 = "b7e3d17636b348f005f11040025ae8c6f645fe92"
@@ -441,7 +436,7 @@ uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
 version = "1.10.3"
 
 [[OneDNN]]
-deps = ["BenchmarkTools", "CEnum", "CachedArrays", "Cassette", "ChainRulesCore", "CxxWrap", "Flux", "LibGit2", "Libdl", "LinearAlgebra", "MacroTools", "Polyester", "ProgressMeter", "Random", "TimerOutputs", "Zygote"]
+deps = ["CEnum", "ChainRulesCore", "CxxWrap", "Flux", "Libdl", "LinearAlgebra", "MacroTools", "Polyester", "ProgressMeter", "Random", "UnPack", "Zygote"]
 path = "../OneDNN"
 uuid = "401ea5d7-52cf-47c0-838c-286eb6d4afaa"
 version = "0.1.0"

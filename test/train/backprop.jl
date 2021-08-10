@@ -146,8 +146,6 @@ end
 
     # Embeddings
     let
-        EmbeddingTables = DLRM._EmbeddingTables
-
         embedding_grads_ref = grads_model_ref.embeddings
         embedding_grads_opt = grads_model_opt.embeddings
         @test length(embedding_grads_ref) == length(embedding_grads_opt)

@@ -10,7 +10,7 @@ function makefunction()
         interaction = DLRM._Model.DotInteraction(),
     )
 
-    return f = (d, s, e) -> Flux.mse(dlrm(d, s), e), dlrm
+    return f = (d, s, e) -> Flux.mse(dlrm(d, s; strategy = EmbeddingTables.PreallocationStrategy(64)), e), dlrm
 end
 
 @testset "Testing Whole Pipeline" begin

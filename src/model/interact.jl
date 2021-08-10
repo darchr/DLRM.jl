@@ -479,59 +479,59 @@ end
 ##### Implementation 2
 #####
 
-# # Coarser interaction layer.
-# # Use OneDNN to implement the batched matrix multiplication then use a custom kernel
-# # for the triangular slicing.
-# function dot_interaction(X, Ys)
-#     d, batchsize = size(X)
+# Coarser interaction layer.
+# Use OneDNN to implement the batched matrix multiplication then use a custom kernel
+# for the triangular slicing.
+function dot_interaction(X, Ys)
+    d, batchsize = size(X)
+
+    combined = fast_vcat(X, Ys)
+    T = reshape(OneDNN.materialize(combined), d, :, batchsize)
+    Z = self_batched_mul(T)
+
+    # Slice out triangular indices of Z into a single 2D slice
+    Zflat = triangular_slice(Z)
+    return OneDNN.concat([X, OneDNN.Memory(Zflat)], 1)
+end
+
+### Self Interaction
+
+# Note on OneDNN matrix multiplication:
 #
-#     combined = fast_vcat(X, Ys)
-#     T = reshape(OneDNN.materialize(combined), d, :, batchsize)
-#     Z = self_batched_mul(T)
-#
-#     # Slice out triangular indices of Z into a single 2D slice
-#     Zflat = triangular_slice(Z)
-#     return OneDNN.concat([X, OneDNN.Memory(Zflat)], 1)
-# end
-#
-# ### Self Interaction
-#
-# # Note on OneDNN matrix multiplication:
-# #
-# # We need to reverse the arguments passed to `matmul` because Julia is column major while
-# # OneDNN is row major.
-# function batched_transpose(x::AbstractArray{T,3}) where {T}
-#     return PermutedDimsArray{T,3,(2, 1, 3),(2, 1, 3),typeof(x)}(x)
-# end
-#
-# batched_transpose(x::OneDNN.Memory{<:Any,3}) = permutedims(x, (2, 1, 3))
-#
-# function self_batched_mul(x::OneDNN.Memory, xt::OneDNN.Memory)
-#     y = OneDNN.matmul(x, xt)
-#     return OneDNN.materialize(y; allowreorder = false)
-# end
-#
-# function self_batched_mul(_x)
-#     x = OneDNN.Memory(_x)
-#     xt = batched_transpose(x)
-#     return self_batched_mul(xt, x)
-# end
-#
-# function ChainRulesCore.rrule(::typeof(self_batched_mul), x)
-#     X = OneDNN.Memory(x)
-#     Xt = batched_transpose(X)
-#     y = self_batched_mul(Xt, X)
-#
-#     back = function self_batched_mul_back(_Δ)
-#         Δ = OneDNN.Memory(_Δ)
-#         Δsum = Δ + batched_transpose(Δ)
-#
-#         # N.B.: Remember that the order of multiplication is reversed because of the whole
-#         # column major vs row majer kerfuffle.
-#         out = OneDNN.matmul(X, Δsum)
-#         return (ChainRulesCore.NoTangent(), OneDNN.materialize(out))
-#     end
-#
-#     return y, back
-# end
-#
+# We need to reverse the arguments passed to `matmul` because Julia is column major while
+# OneDNN is row major.
+function batched_transpose(x::AbstractArray{T,3}) where {T}
+    return PermutedDimsArray{T,3,(2, 1, 3),(2, 1, 3),typeof(x)}(x)
+end
+
+batched_transpose(x::OneDNN.Memory{<:Any,3}) = permutedims(x, (2, 1, 3))
+
+function self_batched_mul(x::OneDNN.Memory, xt::OneDNN.Memory)
+    y = OneDNN.matmul(x, xt)
+    return OneDNN.materialize(y; allowreorder = false)
+end
+
+function self_batched_mul(_x)
+    x = OneDNN.Memory(_x)
+    xt = batched_transpose(x)
+    return self_batched_mul(xt, x)
+end
+
+function ChainRulesCore.rrule(::typeof(self_batched_mul), x)
+    X = OneDNN.Memory(x)
+    Xt = batched_transpose(X)
+    y = self_batched_mul(Xt, X)
+
+    back = function self_batched_mul_back(_Δ)
+        Δ = OneDNN.Memory(_Δ)
+        Δsum = Δ + batched_transpose(Δ)
+
+        # N.B.: Remember that the order of multiplication is reversed because of the whole
+        # column major vs row majer kerfuffle.
+        out = OneDNN.matmul(X, Δsum)
+        return (ChainRulesCore.NoTangent(), OneDNN.materialize(out))
+    end
+
+    return y, back
+end
+

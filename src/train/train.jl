@@ -6,7 +6,7 @@ export bce_loss, wrap_loss, train!
 using Statistics
 
 # internal
-using .._EmbeddingTables
+using EmbeddingTables
 using .._Model
 using .._Utils
 
@@ -166,13 +166,13 @@ gather_embeddings!(x, vec) = append!(x.embeddings, vec)
 
 const TIMES = UInt64[]
 
-function train!(loss, model, data, opt; cb = () -> (), maxiters = nothing, update_batchsize)
+function train!(loss, model, data, opt; cb = () -> (), maxiters = nothing)
     # Run once to make sure data formats are initialized.
     _ = Zygote.gradient(loss, model, first(data)...)
 
     params = DLRMParams(model)
     grads = DLRMGrads(model)
-    updater = BatchUpdater()
+    #updater = BatchUpdater()
 
     cb = runall(cb)
 
@@ -185,7 +185,8 @@ function train!(loss, model, data, opt; cb = () -> (), maxiters = nothing, updat
         _grads = Zygote.gradient(loss, model, d...)
         telemetry(:grads_done)
         gather!(grads, _grads[1])
-        custom_update!(opt, params, grads, updater, update_batchsize)
+        #custom_update!(opt, params, grads, updater, update_batchsize)
+        custom_update!(opt, params, grads)
         telemetry(:update_done)
 
         count += 1
@@ -194,7 +195,7 @@ function train!(loss, model, data, opt; cb = () -> (), maxiters = nothing, updat
     end
 end
 
-function custom_update!(opt, params::DLRMParams, grads::DLRMGrads, update::_Model.BatchUpdater, update_batchsize::Integer)
+function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     # Weight Update
     param_weights = params.weights
     grads_weights = grads.weights
@@ -218,34 +219,26 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads, update::_Mode
     end
 
     # Merge embedding table updates with weight updates.
-    len = length(param_weights)
+    m = length(param_weights)
+    len = length(param_weights) + length(param_embeddings)
     index_translation = params.weight_index_translations
 
-    # TODO: Hack Alert!!
-    # Find the cache manager and disable movement.
-    manager = CachedArrays.manager(parent(grads_weights[1]))
-    manager.policy.movement_enabled = false
-
     Polyester.@batch per = core for i in Base.OneTo(len)
-        CachedArrays.prefetch!(param_weights[i])
-        Flux.update!(
-            opt,
-            param_weights[i],
-            index_translation[i][1],
-            grads_weights[i],
-            index_translation[i][2],
-        )
-
-        CachedArrays.unsafe_free(grads_weights[i])
-    end
-
-    # Embedding Table Update
-    feeder = UpdatePartitioner.(grads_embeddings, update_batchsize)
-    _Model.process!(updater, opt, param_embeddings, feeder, 4)
-
-    manager.policy.movement_enabled = true
-    for grad in grads_embeddings
-        CachedArrays.unsafe_free(grad)
+    #for i in Base.OneTo(len)
+        if i <= m
+            Flux.update!(
+                opt,
+                param_weights[i],
+                index_translation[i][1],
+                grads_weights[i],
+                index_translation[i][2],
+            )
+        else
+            j = i - m
+            Flux.update!(
+                opt, param_embeddings[j], grads_embeddings[j], crunch_translations[j]
+            )
+        end
     end
 
     # Bias update
@@ -254,7 +247,6 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads, update::_Mode
     grads_bias = grads.bias
     for i in eachindex(param_bias, grads_bias)
         Flux.update!(opt, param_bias[i], grads_bias[i])
-        CachedArrays.unsafe_free(grads_bias[i])
     end
 end
 

@@ -69,8 +69,7 @@ end
 # This will only work if the number of unique indices in `src` is less than or equal
 # the current `length(src.indices)`.
 #
-# For the multi-lookup case, we create a new `SparseEmbeddingUpdate` struct and use
-# that.
+# For the multi-lookup case, we create a new `SparseEmbeddingUpdate` struct and use that.
 function _crunch!(
     dst::SparseEmbeddingUpdate{Static{N},A,<:AbstractVector},
     src::SparseEmbeddingUpdate{Static{N},B,<:VecOrMat},

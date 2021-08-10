@@ -2,12 +2,14 @@ using DLRM
 using Test
 using Random
 
+using EmbeddingTables
+using OneDNN
+
 using Flux
 using HDF5: HDF5
 using NaturalSort: NaturalSort
-using Zygote
-using OneDNN
 using StaticArrays
+using Zygote
 
 const DATASET_DIR = joinpath(@__DIR__, "dataset")
 
@@ -16,9 +18,9 @@ const DATASET_DIR = joinpath(@__DIR__, "dataset")
 # include("embedding/lookup.jl")
 # include("embedding/map.jl")
 # include("embedding/update.jl")
-#
-# # Model Pipeline
-# include("model/interact.jl")
+
+# Model Pipeline
+include("model/interact.jl")
 #include("model/embedding_update.jl")
 include("model/model.jl")
 
