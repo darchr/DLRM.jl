@@ -46,6 +46,7 @@ mutable struct BatchUpdater
     current_index::Int
     done::Bool
     table_update_queue_lock::ReentrantLock
+    translations::Cache{Dict{Int,Int}}
 end
 
 function BatchUpdater(queue_length = 500)
@@ -58,6 +59,7 @@ function BatchUpdater(queue_length = 500)
         1,
         false,
         ReentrantLock(),
+        ObjectCache{Dict{Int,Int}}()
     )
 end
 
@@ -117,7 +119,7 @@ function grabwork(updater::BatchUpdater, tables, updates)
 
             updater.current_index = current_index
         end
-        sparse_update, current_index
+        sparse_update[1], current_index
     end
 
     table = tables[index]
@@ -128,8 +130,11 @@ function _process_task(updater::BatchUpdater, opt, tables, updates)
     work = grabwork(updater, tables, updates)
     work === nothing && return false
     @unpack table, update = work
+    @unpack translations = updater
 
-    processed_update = Flux.Optimise.apply!(opt, table, update)
+    dict = translations[]
+    processed_update = Flux.Optimise.apply!(opt, table, update, dict)
+    return!(translations, dict)
 
     # Add the results to the writeback queue.
     @unpack writeback_queue, writeback_queue_lock = updater
