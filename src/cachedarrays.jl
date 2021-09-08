@@ -2,6 +2,22 @@ CachedArrays.tostring(::Type{<:DLRMModel}) = "DLRMModel"
 CachedArrays.tostring(::Type{<:Flux.Chain}) = "Chain"
 CachedArrays.tostring(::Type{<:Zygote.Pullback}) = "Pullback"
 
+# Hacks to get BF16 working with our customized LLVM stuff
+function Base.getindex(A::ReadableCachedArray{OneDNN.BFloat16}, i::Int)
+    @boundscheck checkbounds(A, i)
+    v = CachedArrays.LoadStore.unsafe_custom_load(Ptr{UInt16}(pointer(A)), i)
+    return OneDNN.BFloat16(v)
+end
+
+function Base.setindex!(A::WritableCachedArray{OneDNN.BFloat16}, v, i::Int)
+    @boundscheck checkbounds(A, i)
+    return CachedArrays.LoadStore.unsafe_custom_store!(
+        Ptr{UInt16}(pointer(A)),
+        convert(OneDNN.BFloat16, v).val,
+        i,
+    )
+end
+
 #####
 ##### CachedArrays Compatility
 #####
@@ -15,6 +31,10 @@ CachedArrays.@wrapper OneDNN.Memory array
 #
 # Make the destination writable for initialization.
 @annotate function _Model.multithread_init(f, data::UnwritableCachedArray)
+    return __recurse__(f, __writable__(data))
+end
+
+@annotate function _Model.singlethread_init(f, data::UnwritableCachedArray)
     return __recurse__(f, __writable__(data))
 end
 

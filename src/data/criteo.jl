@@ -143,6 +143,7 @@ end
 
 function binarize(io::IO, _dst::Union{Nothing,AbstractString})
     print("Counting number of data points: ")
+    seekstart(io)
     nlines = countlines(io)
     seekstart(io)
     println(nlines)
@@ -283,9 +284,12 @@ end
 function load!(
     labels, dense, sparse, vx::AbstractVector{DACRecord}; nthreads = Threads.nthreads()
 )
-    Polyester.@batch per=core for i in eachindex(labels, vx)
-        @inbounds record = vx[i]
-        @inbounds labels[i] = record.label
+    Polyester.@batch per=core for i in eachindex(vx)
+    #for i in eachindex(labels, vx)
+        # @inbounds record = vx[i]
+        # @inbounds labels[i] = record.label
+        record = vx[i]
+        labels[i] = record.label
 
         # Explicit loops faster the broadcasting.
         # Due to better constant propagaion maybe?
@@ -313,7 +317,7 @@ struct DACLoader{L,D,S}
     batchsize::Int
 end
 
-function DACLoader(dataset, batchsize::Integer; allocator = default_allocator)
+function DACLoader(dataset, batchsize::Integer; allocator = default_allocator) where {T}
     labels = allocator(Float32, batchsize)
     dense = allocator(Float32, num_continuous_features(DAC()), batchsize)
     # Put batch along the continuous dimension for better lookup locality.
@@ -401,28 +405,31 @@ const TERABYTE_EMBEDDING_SIZES = [
     36,
 ]
 
-default_allocator(::Type{T}, dims...) where {T} = Array{T}(undef, dims...)
-function kaggle_dlrm(allocator = default_allocator)
+function kaggle_dlrm(
+    allocator = default_allocator;
+    weight_eltype = Float32,
+    embedding_eltype = Float32,
+)
+    # Honestly, there's no reason to specialize here.
+    @nospecialize
+
     v = default_allocator(Float32, 1, 1)
     dot = _Model.DotInteraction(v)
+    sparse_feature_size = 128
+    # sparse_feature_size = 16
     return dlrm(
-        [13, 512, 256, 128],
+        [13, 512, 256, sparse_feature_size],
         [1024, 1024, 512, 256, 1],
-        128,
-        #TERABYTE_EMBEDDING_SIZES;
+        # [13, 512, 256, 64, sparse_feature_size],
+        # [512, 256, 1],
+        sparse_feature_size,
         KAGGLE_EMBEDDING_SIZES;
-        constructor = allocator,
-        embedding_constructor = x -> SimpleEmbedding{Static{128}}(x),
         interaction = dot,
+        weight_eltype = weight_eltype,
+        embedding_constructor = x -> SimpleEmbedding{Static{sparse_feature_size}}(x),
+        embedding_eltype = embedding_eltype,
+        allocator = allocator,
     )
-    # return dlrm(
-    #     [13, 512, 256, 64, 16],
-    #     [512, 256, 1],
-    #     16,
-    #     KAGGLE_EMBEDDING_SIZES;
-    #     constructor = allocator,
-    #     embedding_constructor = x -> SimpleEmbedding(x, Val(16)),
-    # )
 end
 
 #####
@@ -453,33 +460,41 @@ end
 
 # Load models from an HDF5 File.
 # TODO: Provide options for CachedArrays etc.
-function load_hdf5(path::AbstractString, allocator = aligned_allocator)
+function load_hdf5(path::AbstractString, allocator = aligned_allocator; kw...)
     return HDF5.h5open(path) do file
-        load_hdf5(file, allocator)
+        load_hdf5(file, allocator; kw...)
     end
 end
 
-function load_hdf5(file::HDF5.File, allocator = aligned_allocator)
+function load_hdf5(
+    file::HDF5.File,
+    allocator = aligned_allocator;
+    weight_modifier = identity,
+    embedding_modifier = identity
+)
     # Load Embeddings
-    embeddings = load_embeddings(file, allocator)
-    bottom_mlp = load_mlp(file, "bot_", allocator)
-    top_mlp = load_mlp(file, "top_", allocator)
+    embeddings = load_embeddings(file, allocator; modifier = embedding_modifier)
+    bottom_mlp = load_mlp(file, "bot_", allocator; modifier = weight_modifier)
+    top_mlp = load_mlp(file, "top_", allocator; modifier = weight_modifier)
     dot = _Model.DotInteraction(Matrix{Float32}(undef, 1, 1))
     return DLRMModel(bottom_mlp, embeddings, dot, top_mlp)
 end
 
-function load_embeddings(file::HDF5.File, allocator = aligned_allocator)
+function load_embeddings(file::HDF5.File, allocator = aligned_allocator; modifier = identity)
     names = sort(filter(startswith("emb"), keys(file)); lt = NaturalSort.natural)
     return map(names) do name
-        _data = read(file, name)
-        data = allocator(eltype(_data), size(_data))
+        _data = modifier(read(file, name))
+        data = allocator(eltype(_data), size(_data)...)
         data .= _data
         return SimpleEmbedding{Static{size(data,1)}}(data)
     end
 end
 
 function load_mlp(
-    file::HDF5.File, prefix_filter::AbstractString, allocator = aligned_allocator
+    file::HDF5.File,
+    prefix_filter::AbstractString,
+    allocator = aligned_allocator;
+    modifier = identity,
 )
     names = sort(filter(startswith(prefix_filter), keys(file)); lt = NaturalSort.natural)
     # Names for layers are structured like this:
@@ -494,16 +509,29 @@ function load_mlp(
     prefixes = unique(first.(splitext.(names)))
     layers = []
     for prefix in prefixes
-        weight = read(file["$prefix.weight"])
-        bias = read(file["$prefix.bias"])
+        _weight = modifier(read(file["$prefix.weight"]))
+        _bias = modifier(read(file["$prefix.bias"]))
+
+        weight = allocator(eltype(_weight), size(_weight)...)
+        weight .= _weight
+        bias = allocator(eltype(_bias), size(_bias)...)
+        bias .= _bias
 
         # Choose whether to use Relu or Sigmoid activation function.
-        if prefix != prefixes[end] || prefix_filter == "bot_"
-            layer = OneDNN.Dense(weight, bias, Flux.relu)
+        isrelu = (prefix != prefixes[end] || prefix_filter == "bot_")
+        if isrelu
+            if prefix != prefixes[end]
+                layer = OneDNN.Dense(weight, bias, Flux.relu)
+            else
+                layer = OneDNN.Dense(weight, bias, Flux.relu, Float32)
+            end
         else
-            layer = OneDNN.Dense(weight, bias, Flux.sigmoid)
+            layer = OneDNN.Dense(weight, bias, identity, Float32)
         end
         push!(layers, layer)
+        if !isrelu
+            push!(layers, x -> OneDNN.eltwise(Flux.sigmoid, x))
+        end
     end
     return Flux.Chain(layers...)
 end

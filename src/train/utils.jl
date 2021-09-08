@@ -3,8 +3,10 @@
 #####
 
 call(f, xs...) = f(xs...)
+forcecall(f, xs...) = call(f, xs...)
+
 runall(f) = f
-runall(fs::AbstractVector) = () -> foreach(call, fs)
+runall(fs::AbstractVector) = (f = call) -> foreach(f, fs)
 
 mutable struct Every{F}
     callback::F
@@ -24,17 +26,21 @@ function (f::Every)()
     end
     return nothing
 end
+forcecall(f::Every) = f.callback()
 
-function test(loss, model, data; record = Float32[], kw...)
+function test(model, data; record = Float32[], strategy)
     s = zero(Float32)
-    count = 0
+    correct = 0
+    total = 0
     ProgressMeter.@showprogress 1 "Perfoming Test" for d in data
-        v = loss(model, d...; kw...)
-        s += v
-        count += 1
+        labels, dense, sparse = d
+        _predictions = CachedArrays.readable(model(dense, sparse; strategy))
+        predictions = round.(convert.(Float32, _predictions))
+        correct += count(predictions .== labels)
+        total += length(predictions)
     end
-    meanval = s / count
-    @show meanval
+    meanval = correct / total
+    @show (correct, total, meanval)
     push!(record, meanval)
     return nothing
 end

@@ -44,45 +44,64 @@ include("validation.jl")
 include("cachedarrays.jl")
 include("playground.jl")
 
-macro setup()
+macro setup(eltyp, embedding_eltyp = eltyp)
     return quote
         using DLRM, Zygote, Flux, HDF5, CachedArrays, OneDNN
         manager = CachedArrays.CacheManager(
             CachedArrays.AlignedAllocator(),
-            CachedArrays.MmapAllocator("/mnt/pm1/public/");
-            localsize = 50_000_000_000,
-            remotesize = 100_000_000_000,
+            CachedArrays.AlignedAllocator(),
+            localsize = 80_000_000_000,
+            remotesize = 1_000_000_000,
             minallocation = 21,
-            #telemetry = CachedArrays.Telemetry(),
         )
         CachedArrays.materialize_os_pages!(manager.local_heap)
 
-        # weight_init = function (x...)
-        #     data = DLRM.tocached(manager)(x...)
-        #     DLRM._Model.multithread_init(DLRM._Model.GlorotNormal(), data)
-        #     return data
-        # end
-
-        # tables = DLRM._Model.create_embeddings(
-        #     # Embedding Constructor
-        #     DLRM.SimpleEmbedding{DLRM.Static{128}},
-        #     # Sparse feature size
-        #     128,
-        #     # Embedding Sizes
-        #     fill(1_000_000, 26),
-        #     # Initializer
-        #     weight_init,
+        # model = DLRM.kaggle_dlrm(
+        #     DLRM.tocached(manager, CachedArrays.ReadWrite());
+        #     weight_eltype = $eltyp,
+        #     embedding_eltype = $embedding_eltyp,
         # )
-        model = DLRM.kaggle_dlrm(DLRM.tocached(Float32, manager))
-        data = DLRM.load(DLRM.DAC(), "/mnt/data1/dac/train.bin")
-        loader = DLRM.DACLoader(
-            data, 2^15; allocator = DLRM.tocached(Float32, manager, CachedArrays.ReadWrite())
-        );
-        loss = DLRM._Train.wrap_loss(
-            #DLRM._Train.bce_loss; strategy = DLRM.SimpleParallelStrategy()
-            DLRM._Train.bce_loss; strategy = DLRM.PreallocationStrategy(128)
+        model = DLRM.load_hdf5(
+            #"model_small.hdf5",
+            "./model_large.hdf5",
+            DLRM.tocached(manager, CachedArrays.ReadWrite());
+            weight_modifier = x -> convert.($eltyp, x),
+            embedding_modifier = x -> convert.($embedding_eltyp, x),
         )
-        opt = Flux.Descent(0.1)
+
+        #data = DLRM.load(DLRM.DAC(), "/home/mark/data/kaggle/train.bin")
+        data = DLRM.load(DLRM.DAC(), "./train_data.bin")
+        loader = DLRM.DACLoader(
+            data,
+            #2^13;
+            2^15;
+            allocator = DLRM.tocached(manager, CachedArrays.ReadWrite()),
+        );
+
+        test_data = DLRM.load(DLRM.DAC(), "./test_data.bin")
+        test_loader = DLRM.DACLoader(
+            test_data,
+            2^16;
+            allocator = DLRM.tocached(manager, CachedArrays.ReadWrite()),
+        )
+
+        strategy = DLRM.PreallocationStrategy{Float32}(128)
+        #strategy = DLRM.PreallocationStrategy{Float32}(16)
+        record = Float32[]
+        _test_cb = () -> DLRM._Train.test(model, test_loader; record, strategy)
+        test_cb = DLRM._Train.Every(_test_cb, 128)
+        #test_cb = DLRM._Train.Every(_test_cb, 512)
+
+        cb = DLRM._Train.Recorder()
+        loss = DLRM._Train.wrap_loss(
+            DLRM._Train.bce_loss;
+            #strategy = DLRM.PreallocationStrategy{Float32}(16),
+            strategy = DLRM.PreallocationStrategy{Float32}(128),
+            cb = cb,
+        )
+
+        opt = Flux.Descent(1.0)
     end |> esc
 end
+
 end # module

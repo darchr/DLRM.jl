@@ -271,7 +271,7 @@ copying.
 """
 function fast_vcat(x::AbstractMatrix, ys::AbstractMatrix)
     # IF there's not enough space in `ys`, then this view creation will fail.
-    vy = view(ys, 1:size(x, 1), :)
+    vy = view(ys, Base.OneTo(size(x, 1)), :)
 
     # Manually unroll to two loops to help Polyester do the right thing.
     #Polyester.@batch per=core for j in axes(vy, 2), i in axes(vy, 1)
@@ -317,12 +317,12 @@ end
 
 # Thank you LoopVectorization for being awesome.
 function gemmavx!(C, A, B)
-    LoopVectorization.@turbo for m ∈ axes(A, 1), n ∈ axes(B, 2)
+    LoopVectorization.@turbo for n ∈ LoopVectorization.indices((C,B), 2), m ∈ LoopVectorization.indices((C,A), 1)
         Cmn = zero(eltype(C))
-        for k ∈ axes(A, 2)
-            Cmn += A[m, k] * B[k, n]
+        for k ∈ LoopVectorization.indices((A,B), (2,1))
+            Cmn += A[m,k] * B[k,n]
         end
-        C[m, n] = Cmn
+        C[m,n] = Cmn
     end
 end
 
@@ -337,21 +337,26 @@ function sumavx(a, b)
 end
 
 function process_slice!(
-    dst::AbstractVector,
+    dst::AbstractVector{T},
     src::AbstractMatrix,
     concat::AbstractVector,
+    padding::Integer = 0,
     scratch = similar(src, size(src, 2), size(src, 2)),
-)
+) where {T}
     # First, perform the concatenation step
     # TODO: Is there a good way to abstract this?
     LoopVectorization.@turbo for i in Base.OneTo(length(concat))
         @inbounds dst[i] = concat[i]
     end
+    range = (length(dst) - padding + 1):length(dst)
+    LoopVectorization.@turbo for i in range
+        @inbounds dst[i] = zero(T)
+    end
 
     # Then, perform the self matrix multiplication and triangular slice operation.
     gemmavx!(scratch, transpose(src), src)
     offset = length(concat) + 1
-    triangular_slice_kernel!(view(dst, offset:length(dst)), scratch)
+    triangular_slice_kernel!(view(dst, offset:(length(dst) - padding)), scratch)
     return nothing
 end
 
@@ -393,12 +398,12 @@ function (dot::DotInteraction)(x::AbstractMatrix, ys::AbstractMatrix; return_t =
     # The "reshape" function should create a new array sharing memory with the old array.
     # This should work for both normal arrays and CachedArrays.
     @assert !isa(T, Base.ReshapedArray)
-    out = process_batches(dot, T, x)
+    out, padding = process_batches(dot, T, x)
 
     # Rely on constant propagation to optimize out any instability caused by
     # the contidional return type.
     if return_t
-        return out, T
+        return out, T, padding
     else
         return out
     end
@@ -406,14 +411,23 @@ end
 
 # Define a custom pullback to vectorize the accumulation of "X".
 # Otherwrise, the accumulation is single threaded.
-function dot_back(dot::DotInteraction, Δ, T, xlen)
+function dot_back(dot::DotInteraction, Δ::OneDNN.Memory, args...)
+    return dot_back(dot, OneDNN.materialize(Δ), args...)
+end
+
+function dot_back(dot::DotInteraction, Δ::OneDNN.Memory{OneDNN.BFloat16}, args...)
+    dx, dt = dot_back(dot, OneDNN.materialize(OneDNN.toeltype(Float32, Δ)), args...)
+    return  dx, dt
+end
+
+function dot_back(dot::DotInteraction, Δ::AbstractMatrix{Float32}, T, xlen, padding)
     batchsize = size(T, 3)
 
-    dx1, dt = process_batches_back(dot, Δ, T, xlen)
+    dx1, dt = process_batches_back(dot, Δ, T, xlen, padding)
     dt_reshaped = reshape(dt, :, batchsize)
 
     # Reverse the concatenation process.
-    dx2 = view(dt_reshaped, 1:xlen, :)
+    dx2 = view(dt_reshaped, Base.OneTo(xlen), :)
 
     # Finally, we need to add together both the contributions to the "x" input.
     dx = sumavx(dx1, dx2)
@@ -421,11 +435,11 @@ function dot_back(dot::DotInteraction, Δ, T, xlen)
 end
 
 function ChainRulesCore.rrule(dot::DotInteraction, X, Y::AbstractMatrix)
-    forward, t = dot(X, Y; return_t = true)
+    forward, t, padding = dot(X, Y; return_t = true)
     xlen = size(X, 1)
 
     function dot_pullback(Δ)
-        dx, dy = dot_back(dot, Δ, t, xlen)
+        dx, dy = dot_back(dot, Δ, t, xlen, padding)
         return (ChainRulesCore.NoTangent(), dx, dy)
     end
     return forward, dot_pullback
@@ -435,24 +449,28 @@ function process_batches(dot::DotInteraction, T, x)
     sz = size(T, 2)
     offset, batchsize = size(x)
 
-    dst = similar(x, eltype(x), (div(sz^2 - sz, 2) + offset, batchsize))
+    unpadded_size = div(sz^2 - sz, 2) + offset
+    padded_size = up_to_mul_of(unpadded_size, POST_INTERACTION_PAD_TO_MUL)
+    padding = padded_size - unpadded_size
+
+    dst = similar(x, eltype(x), (padded_size, batchsize))
     init!(dot, sz)
 
     Polyester.@batch per=core for batch in Base.OneTo(batchsize)
         vT = view(T, :, :, batch)
         vdst = view(dst, :, batch)
         vx = view(x, :, batch)
-        process_slice!(vdst, vT, vx, dot[])
+        process_slice!(vdst, vT, vx, padding, dot[])
     end
-    return dst
+    return dst, padding
 end
 
-function process_batches_back(dot::DotInteraction, Δ::AbstractMatrix{T}, t, xlen) where {T}
+function process_batches_back(dot::DotInteraction, Δ::AbstractMatrix{T}, t, xlen, padding) where {T}
     # Take two view, one view is the concatenated version of "x" and the other will be
     # fed back to reverse the slicing process.
     batchsize = size(Δ, 2)
     dx = view(Δ, Base.OneTo(xlen), :)
-    remainder = view(Δ, (xlen + 1):size(Δ, 1), :)
+    remainder = view(Δ, (xlen + 1):(size(Δ, 1) - padding), :)
 
     dt = similar(Δ, T, size(t))
     Polyester.@batch per=core for batch in Base.OneTo(batchsize)
@@ -461,7 +479,6 @@ function process_batches_back(dot::DotInteraction, Δ::AbstractMatrix{T}, t, xle
 
         vΔ = view(remainder, :, batch)
         triangular_slice_back_fuse_add_transpose_kernel!(scratch, vΔ)
-
         # Reverse the matrix multiplication.
         vdt = view(dt, :, :, batch)
         vt = view(t, :, :, batch)

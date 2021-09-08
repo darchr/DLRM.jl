@@ -4,9 +4,10 @@ module _Utils
 import OneDNN
 
 # utility functions
-export zero!, donothing
+export zero!, donothing, default_allocator
 zero!(x) = x .= zero(eltype(x))
 donothing(x...) = nothing
+default_allocator(::Type{T}, dims...) where {T} = Array{T}(undef, dims...)
 
 # utility type aliases.
 export MemoryAround
