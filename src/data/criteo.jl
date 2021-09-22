@@ -409,24 +409,24 @@ function kaggle_dlrm(
     allocator = default_allocator;
     weight_eltype = Float32,
     embedding_eltype = Float32,
+    feature_size = 16,
+    embedding_constructor = x -> SimpleEmbedding{Static{feature_size}}(x),
 )
     # Honestly, there's no reason to specialize here.
     @nospecialize
 
     v = default_allocator(Float32, 1, 1)
     dot = _Model.DotInteraction(v)
-    sparse_feature_size = 128
-    # sparse_feature_size = 16
     return dlrm(
-        [13, 512, 256, sparse_feature_size],
+        [13, 512, 256, feature_size],
         [1024, 1024, 512, 256, 1],
-        # [13, 512, 256, 64, sparse_feature_size],
+        # [13, 512, 256, 64, feature_size],
         # [512, 256, 1],
-        sparse_feature_size,
+        feature_size,
         KAGGLE_EMBEDDING_SIZES;
         interaction = dot,
         weight_eltype = weight_eltype,
-        embedding_constructor = x -> SimpleEmbedding{Static{sparse_feature_size}}(x),
+        embedding_constructor = embedding_constructor,
         embedding_eltype = embedding_eltype,
         allocator = allocator,
     )
