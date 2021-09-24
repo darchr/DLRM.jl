@@ -131,7 +131,7 @@ struct DLRMParams{W,M,B,C,E}
     # Embedding tables and pre-allocated dictionaries for doing the pre-compression
     # before embedding table update.
     embeddings::Vector{E}
-    crunch_translations::Vector{Dict{Int,Int}}
+    indexers::Vector{EmbeddingTables.Indexer}
 end
 
 mantissa_trick(::DLRMParams) = true
@@ -164,7 +164,7 @@ function DLRMParams(model; mantissa_trick = false)
     WIT = Tuple{Vector{Int},Vector{Int}}
     B = typeof(first(model.bottom_mlp).bias)
     E = eltype(model.embeddings)
-    params = DLRMParams(W[], M[], WIT[], B[], C[], E[], Dict{Int,Int}[])
+    params = DLRMParams(W[], M[], WIT[], B[], C[], E[], EmbeddingTables.Indexer[])
     gather!(params, model)
 
     # Construct the mantissas
@@ -200,12 +200,12 @@ struct DLRMGrads{T,U}
     embeddings::Vector{SparseEmbeddingUpdate}
 end
 
-function _tof32(::Type{OneDNN.Memory{T,N,A}}) where {T <: AbstractFloat,N,A}
+function _tof32(::Type{OneDNN.Memory{T,N,A}}) where {T<:AbstractFloat,N,A}
     return OneDNN.Memory{Float32,N,_tof32(A)}
 end
 
-_tof32(::Type{Array{T,N}}) where {T <: AbstractFloat,N} = Array{Float32,N}
-function _tof32(::Type{CachedArrays.CachedArray{T,N,S,M}}) where {T <: AbstractFloat,N,S,M}
+_tof32(::Type{Array{T,N}}) where {T<:AbstractFloat,N} = Array{Float32,N}
+function _tof32(::Type{CachedArrays.CachedArray{T,N,S,M}}) where {T<:AbstractFloat,N,S,M}
     return CachedArrays.CachedArray{Float32,N,S,M}
 end
 
@@ -275,13 +275,7 @@ end
 #####
 
 function train!(
-    loss,
-    model,
-    data,
-    opt;
-    cb = () -> (),
-    maxiters = nothing,
-    mantissa_trick = false,
+    loss, model, data, opt; cb = () -> (), maxiters = nothing, mantissa_trick = false
 )
     # Run once to make sure data formats are initialized.
     _ = Zygote.gradient(loss, model, first(data)...)
@@ -344,50 +338,36 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
         populate_translations!(params, grads)
     end
 
-    # Allocate dictionaries once, to avoid allocating them every time we need to do a
-    # gradient update.
-    crunch_translations = params.crunch_translations
-    if isempty(crunch_translations)
-        for _ in eachindex(param_embeddings)
-            push!(crunch_translations, eltype(crunch_translations)())
-        end
-    end
-
     # Merge embedding table updates with weight updates.
     m = length(param_weights)
-    len = length(param_weights) + length(param_embeddings)
     index_translation = params.weight_index_translations
 
-    # TODO: Hack Alert!!
-    # Find the cache manager and disable movement.
-    manager = CachedArrays.manager(parent(grads_weights[1]))
-    manager.policy.movement_enabled = false
-
-    Polyester.@batch per = core for i in Base.OneTo(len)
-        if i <= m
-            # Decide if we're going to do the mantissa trick or not.
-            # Remember, the mantissa trick glues the lower 16 bits of the mantissa to bf16
-            # weights, allowing for higher precision intermediate values during training.
-            if mantissa_trick(params)
-                weights = OneDNN.Mirrored(param_weights[i], param_mantissas[i])
-            else
-                weights = param_weights[i]
-            end
-            Flux.update!(
-                opt,
-                weights,
-                index_translation[i][1],
-                grads_weights[i],
-                index_translation[i][2],
-            )
+    Polyester.@batch (per = core) for i in Base.OneTo(m)
+        # Decide if we're going to do the mantissa trick or not.
+        # Remember, the mantissa trick glues the lower 16 bits of the mantissa to bf16
+        # weights, allowing for higher precision intermediate values during training.
+        if mantissa_trick(params)
+            weights = OneDNN.Mirrored(param_weights[i], param_mantissas[i])
         else
-            j = i - m
-            Flux.update!(
-                opt, param_embeddings[j], grads_embeddings[j], crunch_translations[j]
-            )
+            weights = param_weights[i]
+        end
+        Flux.update!(
+            opt, weights, index_translation[i][1], grads_weights[i], index_translation[i][2]
+        )
+    end
+
+    # Allocate dictionaries once, to avoid allocating them every time we need to do a
+    # gradient update.
+    indexers = params.indexers
+    if isempty(indexers)
+        for _ in eachindex(param_embeddings)
+            push!(indexers, EmbeddingTables.Indexer())
         end
     end
-    manager.policy.movement_enabled = true
+
+    EmbeddingTables.update!(
+        opt, param_embeddings, grads_embeddings, indexers; num_splits = 8, nthreads = 12
+    )
 
     # Bias update
     # Single thread since this is super quick anyways.

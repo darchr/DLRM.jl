@@ -184,19 +184,20 @@ function dlrm(
 
     # Where does memory come from?
     allocator = default_allocator,
+    embedding_allocator = allocator,
 ) where {W,E}
     Random.seed!(51234)
 
     # Create closures for constructing the weights, biases, and embedding tables.
     function init_weight(dims...)
         data = allocator(W, dims...)
-        singlethread_init(weight_init_kernel, data)
+        multithread_init(weight_init_kernel, data)
         return data
     end
 
     function init_embedding(dims...)
-        data = allocator(E, dims...)
-        singlethread_init(embedding_init_kernel, data)
+        data = embedding_allocator(E, dims...)
+        multithread_init(embedding_init_kernel, data)
         return data
     end
 

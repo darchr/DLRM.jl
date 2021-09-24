@@ -410,7 +410,7 @@ function kaggle_dlrm(
     weight_eltype = Float32,
     embedding_eltype = Float32,
     feature_size = 16,
-    embedding_constructor = x -> SimpleEmbedding{Static{feature_size}}(x),
+    embedding_constructor = SimpleEmbedding{Static{feature_size}},
 )
     # Honestly, there's no reason to specialize here.
     @nospecialize
@@ -437,6 +437,7 @@ end
 #####
 
 # Allocate arrays so the base pointer is aligned to the start of a cache line.
+aligned_allocator(::Type{T}, args::Vararg{Int,N}) where {T,N} = aligned_allocator(T, args)
 function aligned_allocator(::Type{T}, dims::NTuple{N,Int}) where {T,N}
     ptr_ref = Ref(Ptr{Nothing}())
     bytes = sizeof(T) * prod(dims)

@@ -75,7 +75,7 @@ end
 @annotate function (dot::_Model.DotInteraction)(
     x::UnreadableCachedArray, ys::Vector{<:UnreadableCachedArray}; kw...
 )
-    return dot(__readable__(x), __readable__.(ys); kw...)
+    return dot(__readable__(x), map(__readable__, ys); kw...)
 end
 
 @annotate function ChainRulesCore.rrule(
