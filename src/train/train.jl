@@ -275,7 +275,14 @@ end
 #####
 
 function train!(
-    loss, model, data, opt; cb = () -> (), maxiters = nothing, mantissa_trick = false
+    loss,
+    model,
+    data,
+    opt;
+    cb = () -> (),
+    maxiters = nothing,
+    mantissa_trick = false,
+    embedding_threads = 12,
 )
     # Run once to make sure data formats are initialized.
     _ = Zygote.gradient(loss, model, first(data)...)
@@ -306,7 +313,7 @@ function train!(
 
         # Weight Update
         gather!(grads, _grads[2])
-        custom_update!(opt, params, grads)
+        custom_update!(opt, params, grads; embedding_threads)
 
         # Callbacks
         push!(iteration_times, time_ns() - start)
@@ -321,7 +328,7 @@ function train!(
     return (; iteration_times, losses)
 end
 
-function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
+function custom_update!(opt, params::DLRMParams, grads::DLRMGrads; embedding_threads = 12)
     # Weight Update
     param_weights = params.weights
     param_mantissas = params.mantissas
@@ -366,7 +373,12 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads)
     end
 
     EmbeddingTables.update!(
-        opt, param_embeddings, grads_embeddings, indexers; num_splits = 8, nthreads = 12
+        opt,
+        param_embeddings,
+        grads_embeddings,
+        indexers;
+        num_splits = 8,
+        nthreads = embedding_threads,
     )
 
     # Bias update
