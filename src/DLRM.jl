@@ -1,6 +1,6 @@
 module DLRM
 
-export DLRMModel, dlrm
+export DLRMModel, dlrm, DotInteraction
 
 # stdlib
 using LinearAlgebra: LinearAlgebra

@@ -1,6 +1,6 @@
 module _Model
 
-export DLRMModel, dlrm
+export DLRMModel, dlrm, DotInteraction
 
 # stdlib
 import Random
@@ -85,8 +85,8 @@ function create_mlp(sizes, sigmoid_index; init)
         layer = OneDNN.Dense(Flux.Dense(in, out, activation; init = init))
         push!(layers, layer)
         if issigmoid
-            push!(layers, x -> OneDNN.toeltype(Float32, x))
-            push!(layers, x -> OneDNN.eltwise(Flux.sigmoid, x))
+            push!(layers, Base.Fix1(OneDNN.toeltype, Float32))
+            push!(layers, Base.Fix1(OneDNN.eltwise, Flux.sigmoid))
         end
     end
     return Flux.Chain(layers...)
