@@ -178,6 +178,12 @@ uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 deps = ["Mmap"]
 uuid = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 
+[[Dictionaries]]
+deps = ["Indexing", "Random"]
+git-tree-sha1 = "4b1cea8bbbc46367b0c551bb22bd2debb083b303"
+uuid = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
+version = "0.3.12"
+
 [[DiffResults]]
 deps = ["StaticArrays"]
 git-tree-sha1 = "c18e98cba888c6c25d1c3b048e4b3380ca956805"
@@ -211,7 +217,7 @@ deps = ["ArgTools", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 
 [[EmbeddingTables]]
-deps = ["ArrayInterface", "CachedArrays", "ChainRulesCore", "Flux", "LoopVectorization", "ManualMemory", "Polyester", "Random", "StaticArrays", "UnPack"]
+deps = ["ArrayInterface", "ChainRulesCore", "Dictionaries", "Flux", "LoopVectorization", "ManualMemory", "Polyester", "Random", "Static", "StaticArrays", "StrideArraysCore"]
 path = "../EmbeddingTables"
 uuid = "c151d800-c36a-44cc-9e8c-19173c45605f"
 version = "0.1.0"
@@ -302,6 +308,11 @@ version = "0.4.3"
 git-tree-sha1 = "28e837ff3e7a6c3cdb252ce49fb412c8eb3caeef"
 uuid = "615f187c-cbe4-4ef1-ba3b-2fcf58d6d173"
 version = "0.1.0"
+
+[[Indexing]]
+git-tree-sha1 = "ce1566720fd6b19ff3411404d4b977acd4814f9f"
+uuid = "313cdc1a-70c2-5d6a-ae34-0150d3930a38"
+version = "1.1.1"
 
 [[InteractiveUtils]]
 deps = ["Markdown"]
@@ -470,7 +481,7 @@ uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
 version = "1.10.7"
 
 [[OneDNN]]
-deps = ["CEnum", "ChainRulesCore", "CxxWrap", "Flux", "Libdl", "LinearAlgebra", "MacroTools", "Polyester", "ProgressMeter", "Random", "UnPack", "Zygote"]
+deps = ["CEnum", "ChainRulesCore", "CxxWrap", "Flux", "Libdl", "LinearAlgebra", "MacroTools", "Polyester", "ProgressMeter", "Random", "UnPack", "Zygote", "ZygoteRules"]
 path = "../OneDNN"
 uuid = "401ea5d7-52cf-47c0-838c-286eb6d4afaa"
 version = "0.1.0"
@@ -783,9 +794,9 @@ version = "0.6.22"
 
 [[ZygoteRules]]
 deps = ["MacroTools"]
-git-tree-sha1 = "9e7a1e8ca60b742e508a315c17eef5211e7fbfd7"
+git-tree-sha1 = "8c1a8e4dfacb1fd631745552c8db35d0deb09ea0"
 uuid = "700de1a5-db45-46bc-99cf-38207098b444"
-version = "0.2.1"
+version = "0.2.2"
 
 [[libcxxwrap_julia_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]

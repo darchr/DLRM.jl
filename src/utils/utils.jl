@@ -1,7 +1,20 @@
 module _Utils
 
 # Imports
+import Flux
 import OneDNN
+
+# see: https://github.com/FluxML/ZygoteRules.jl/pull/21
+import ZygoteRules: ZygoteRules, _pullback, AContext, literal_getproperty, literal_getfield
+
+function pullback_for_default_literal_getproperty(cx::AContext, x, ::Val{f}) where {f}
+    return _pullback(cx, literal_getfield, x, Val{f}())
+end
+
+function ZygoteRules._pullback(cx::AContext, ::typeof(literal_getproperty), x::Flux.Chain, ::Val{f}) where {f}
+    return pullback_for_default_literal_getproperty(cx, x, Val{f}())
+end
+
 
 # utility functions
 export zero!, donothing, default_allocator

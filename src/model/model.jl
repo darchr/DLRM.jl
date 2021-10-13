@@ -25,6 +25,7 @@ import Polyester
 import ProgressMeter
 import UnPack: @unpack
 import Zygote
+import ZygoteRules: ZygoteRules, _pullback, AContext, literal_getproperty
 
 # Documentation
 using DocStringExtensions
@@ -71,7 +72,7 @@ end
 # Then, we dump everying into a `Flux.Chain` to become concretely typed.
 function create_mlp(sizes, sigmoid_index; init)
     layers = Any[]
-    for i = Base.OneTo(length(sizes) - 1)
+    for i in Base.OneTo(length(sizes) - 1)
         in = sizes[i]
         out = sizes[i + 1]
         issigmoid = (i == sigmoid_index - 1)
@@ -121,6 +122,11 @@ struct DLRMModel{B,E,I,T}
 end
 
 Flux.@functor DLRMModel (bottom_mlp, embeddings, top_mlp)
+function ZygoteRules._pullback(
+    cx::AContext, ::typeof(literal_getproperty), x::DLRMModel, ::Val{f}
+) where {f}
+    return _Utils.pullback_for_default_literal_getproperty(cx, x, Val{f}())
+end
 
 # Setup a scheme for recording callbacks.
 back(x) = Symbol("$(x)_back")
@@ -177,7 +183,6 @@ function dlrm(
     # Options for initializaztion
     weight_init_kernel = GlorotNormal(),
     weight_eltype::Type{W} = Float32,
-
     embedding_constructor = SimpleEmbedding,
     embedding_init_kernel = ScaledUniform(),
     embedding_eltype::Type{E} = Float32,
@@ -204,7 +209,7 @@ function dlrm(
     # Create the bottom MLP
     bottom_mlp = create_mlp(bottom_mlp_sizes, 0; init = init_weight)
     embeddings = create_embeddings(
-        embedding_constructor, sparse_feature_size, embedding_sizes; init = init_embedding,
+        embedding_constructor, sparse_feature_size, embedding_sizes; init = init_embedding
     )
 
     # Compute the size of the first layer for the top mlp.
