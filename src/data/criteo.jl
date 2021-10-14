@@ -521,13 +521,9 @@ function load_mlp(
         # Choose whether to use Relu or Sigmoid activation function.
         isrelu = (prefix != prefixes[end] || prefix_filter == "bot_")
         if isrelu
-            if prefix != prefixes[end]
-                layer = OneDNN.Dense(weight, bias, Flux.relu)
-            else
-                layer = OneDNN.Dense(weight, bias, Flux.relu, Float32)
-            end
+            layer = OneDNN.Dense(weight, bias, Flux.relu)
         else
-            layer = OneDNN.Dense(weight, bias, identity, Float32)
+            layer = OneDNN.Dense(weight, bias, identity)
         end
         push!(layers, layer)
         if !isrelu

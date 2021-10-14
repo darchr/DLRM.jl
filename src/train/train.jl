@@ -124,7 +124,8 @@ struct DLRMParams{W,M,B,C,E}
     # The weights and weight gradients end up with different layouts.
     # Here, we cache the indices from the grads to the weights to make the updating
     # process faster.
-    weight_index_translations::Vector{Tuple{Vector{Int},Vector{Int}}}
+    #weight_index_translations::Vector{Tuple{Vector{Int},Vector{Int}}}
+    weight_index_translations::Vector{Tuple{Ptr{Float32},Ptr{Float32}}}
     bias::Vector{B}
     bias_mantissas::Vector{C}
 
@@ -161,7 +162,8 @@ function DLRMParams(model; mantissa_trick = false)
         C = Nothing
     end
 
-    WIT = Tuple{Vector{Int},Vector{Int}}
+    #WIT = Tuple{Vector{Int},Vector{Int}}
+    WIT = Tuple{Ptr{Float32},Ptr{Float32}}
     B = typeof(first(model.bottom_mlp).bias)
     E = eltype(model.embeddings)
     params = DLRMParams(W[], M[], WIT[], B[], C[], E[], EmbeddingTables.Indexer[])
@@ -313,7 +315,7 @@ function train!(
 
         # Weight Update
         gather!(grads, _grads[2])
-        custom_update!(opt, params, grads; embedding_threads)
+        custom_update!(opt, params, grads, telemetry; embedding_threads)
 
         # Callbacks
         push!(iteration_times, time_ns() - start)
@@ -328,7 +330,9 @@ function train!(
     return (; iteration_times, losses)
 end
 
-function custom_update!(opt, params::DLRMParams, grads::DLRMGrads; embedding_threads = 12)
+function custom_update!(
+    opt, params::DLRMParams, grads::DLRMGrads, telemetry = donothing; embedding_threads = 12
+)
     # Weight Update
     param_weights = params.weights
     param_mantissas = params.mantissas
@@ -346,22 +350,51 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads; embedding_thr
     end
 
     # Merge embedding table updates with weight updates.
-    m = length(param_weights)
-    index_translation = params.weight_index_translations
-
-    Polyester.@batch (per = core) for i in Base.OneTo(m)
-        # Decide if we're going to do the mantissa trick or not.
-        # Remember, the mantissa trick glues the lower 16 bits of the mantissa to bf16
-        # weights, allowing for higher precision intermediate values during training.
-        if mantissa_trick(params)
-            weights = OneDNN.Mirrored(param_weights[i], param_mantissas[i])
-        else
-            weights = param_weights[i]
-        end
-        Flux.update!(
-            opt, weights, index_translation[i][1], grads_weights[i], index_translation[i][2]
-        )
+    #m = length(param_weights)
+    #index_translation = params.weight_index_translations
+    translations = params.weight_index_translations
+    eta = opt.eta
+    Polyester.@batch (per = core) for i in eachindex(translations)
+        src, dst = translations[i]
+        update = unsafe_load(dst) - eta * unsafe_load(src)
+        unsafe_store!(dst, update)
     end
+    # Polyester.@batch (per = core) for i in Base.ONeTo(m)
+    #     # # Decide if we're going to do the mantissa trick or not.
+    #     # # Remember, the mantissa trick glues the lower 16 bits of the mantissa to bf16
+    #     # # weights, allowing for higher precision intermediate values during training.
+    #     # if mantissa_trick(params)
+    #     #     weights = OneDNN.Mirrored(param_weights[i], param_mantissas[i])
+    #     # else
+    #     #     weights = param_weights[i]
+    #     # end
+    #     weights = param_weights[i]
+    #     Flux.update!(
+    #         opt, weights, index_translation[i][1], grads_weights[i], index_translation[i][2]
+    #     )
+    # end
+
+    # Bias update
+    # Single thread since this is super quick anyways.
+    param_bias = params.bias
+    param_bias_mantissas = params.bias_mantissas
+    grads_bias = grads.bias
+    # if mantissa_trick(params)
+    #     for i in eachindex(param_bias, grads_bias)
+    #         _bias = OneDNN.Mirrored(param_bias[i], param_bias_mantissas[i])
+    #         Flux.update!(opt, _bias, grads_bias[i])
+    #     end
+    # else
+    #     for i in eachindex(param_bias, grads_bias)
+    #         Flux.update!(opt, param_bias[i], grads_bias[i])
+    #     end
+    # end
+
+    for i in eachindex(param_bias, grads_bias)
+        Flux.update!(opt, param_bias[i], grads_bias[i])
+    end
+
+    telemetry(:weight_update_done)
 
     # Allocate dictionaries once, to avoid allocating them every time we need to do a
     # gradient update.
@@ -381,32 +414,28 @@ function custom_update!(opt, params::DLRMParams, grads::DLRMGrads; embedding_thr
         nthreads = embedding_threads,
     )
 
-    # Bias update
-    # Single thread since this is super quick anyways.
-    param_bias = params.bias
-    param_bias_mantissas = params.bias_mantissas
-    grads_bias = grads.bias
-    if mantissa_trick(params)
-        for i in eachindex(param_bias, grads_bias)
-            _bias = OneDNN.Mirrored(param_bias[i], param_bias_mantissas[i])
-            Flux.update!(opt, _bias, grads_bias[i])
-        end
-    else
-        for i in eachindex(param_bias, grads_bias)
-            Flux.update!(opt, param_bias[i], grads_bias[i])
-        end
-    end
+    return telemetry(:embedding_update_done)
 end
 
 function populate_translations!(params, grads)
-    empty!(params.weight_index_translations)
+    translations = params.weight_index_translations
+    empty!(translations)
     for (param, grad) in zip(params.weights, grads.weights)
         @assert isa(param, OneDNN.Memory)
         @assert isa(grad, OneDNN.Memory)
         param_indices = OneDNN.generate_linear_indices(param)
         grad_indices = OneDNN.generate_linear_indices(grad)
-        push!(params.weight_index_translations, (param_indices, grad_indices))
+
+        grad_parent = parent(grad)
+        param_parent = parent(param)
+        for i in eachindex(param_indices, grad_indices)
+            src_ptr = pointer(grad_parent, grad_indices[i])
+            dst_ptr = pointer(param_parent, param_indices[i])
+            push!(translations, (src_ptr, dst_ptr))
+        end
+        #push!(params.weight_index_translations, (param_indices, grad_indices))
     end
+    sort!(translations; by = last)
     return nothing
 end
 

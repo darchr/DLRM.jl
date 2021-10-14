@@ -21,7 +21,6 @@ const DATASET_DIR = joinpath(@__DIR__, "dataset")
 
 # # Model Pipeline
 # include("model/interact.jl")
-# #include("model/embedding_update.jl")
 # include("model/model.jl")
 #
 # # Training
