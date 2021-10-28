@@ -70,19 +70,6 @@ function ChainRulesCore.rrule(
     return z, bce_pullback
 end
 
-# function ChainRulesCore.rrule(
-#     ::typeof(bce_loss),
-#     x::AbstractVector{OneDNN.BFloat16},
-#     y::AbstractVector{T},
-# ) where {T}
-#     z, pullback = ChainRulesCore.rrule(bce_loss, convert.(Float32, x), y)
-#     function conversion_pullback(Δ)
-#         a, b, c = pullback(Δ)
-#         return (a, OneDNN.toeltype(OneDNN.BFloat16, OneDNN.Memory(b)), c)
-#     end
-#     return z, conversion_pullback
-# end
-
 struct LossWrapper{F,NT}
     f::F
     kw::NT
@@ -248,29 +235,6 @@ function gather_mlp!(x, chain)
 end
 
 gather_embeddings!(x, vec) = append!(x.embeddings, vec)
-
-#####
-##### Utils
-#####
-
-# Record times for each checkpoint
-struct Recorder
-    vals::Vector{UInt64}
-    syms::Vector{Symbol}
-end
-
-Recorder() = Recorder(UInt64[], Symbol[])
-function Base.empty!(recorder::Recorder)
-    empty!(recorder.vals)
-    empty!(recorder.syms)
-    return recorder
-end
-
-function (recorder::Recorder)(sym::Symbol)
-    push!(recorder.vals, time_ns())
-    push!(recorder.syms, sym)
-    return nothing
-end
 
 #####
 ##### Train Loop
