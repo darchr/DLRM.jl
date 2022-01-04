@@ -64,10 +64,9 @@ julia> y
 function triangular_slice_kernel!(y::AbstractVector, x::AbstractMatrix)
     yindex = 0
     sz = size(x, 2)
-    for i in Base.OneTo(sz - 1)
+    @inbounds for i in Base.OneTo(sz - 1)
         xindex = sz * i
-        # Give the inner loop a small kick with LoopVectorization.
-        LoopVectorization.@turbo for j in Base.OneTo(i)
+        @simd ivdep for j in Base.OneTo(i)
             y[yindex + j] = x[xindex + j]
         end
         yindex += i
@@ -346,10 +345,12 @@ function process_slice!(
     # First, perform the concatenation step
     # TODO: Is there a good way to abstract this?
     LoopVectorization.@turbo for i in Base.OneTo(length(concat))
+    #for i in Base.OneTo(length(concat))
         @inbounds dst[i] = concat[i]
     end
     range = (length(dst) - padding + 1):length(dst)
     LoopVectorization.@turbo for i in range
+    #for i in range
         @inbounds dst[i] = zero(T)
     end
 
