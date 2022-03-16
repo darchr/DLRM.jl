@@ -98,7 +98,7 @@ macro setup(eltyp, embedding_eltyp = eltyp)
         # test_cb = DLRM._Train.Every(_test_cb, 128)
         # test_cb = DLRM._Train.Every(_test_cb, 512)
 
-        cb = DLRM._Train.Recorder()
+        #cb = DLRM._Train.Recorder()
         loss = DLRM._Train.wrap_loss(
             DLRM._Train.bce_loss;
             strategy = DLRM.PreallocationStrategy{Float32}(feature_size),

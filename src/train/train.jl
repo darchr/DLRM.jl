@@ -280,6 +280,7 @@ function train!(
         # Weight Update
         gather!(grads, _grads[2])
         custom_update!(opt, params, grads, telemetry; embedding_threads)
+        println()
 
         # Callbacks
         push!(iteration_times, time_ns() - start)
@@ -299,7 +300,6 @@ function custom_update!(
 )
     # Weight Update
     param_weights = params.weights
-    param_mantissas = params.mantissas
     grads_weights = grads.weights
 
     param_embeddings = params.embeddings
