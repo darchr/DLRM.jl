@@ -1,8 +1,12 @@
 module _Utils
 
+export SIMDPtrMap, PtrMap, simdcompress, simdcompress!, sgd!
+
 # Imports
 import Flux
 import OneDNN
+import Polyester
+import SIMD
 
 # see: https://github.com/FluxML/ZygoteRules.jl/pull/21
 import ZygoteRules: ZygoteRules, _pullback, AContext, literal_getproperty, literal_getfield
@@ -11,10 +15,11 @@ function pullback_for_default_literal_getproperty(cx::AContext, x, ::Val{f}) whe
     return _pullback(cx, literal_getfield, x, Val{f}())
 end
 
-function ZygoteRules._pullback(cx::AContext, ::typeof(literal_getproperty), x::Flux.Chain, ::Val{f}) where {f}
+function ZygoteRules._pullback(
+    cx::AContext, ::typeof(literal_getproperty), x::Flux.Chain, ::Val{f}
+) where {f}
     return pullback_for_default_literal_getproperty(cx, x, Val{f}())
 end
-
 
 # utility functions
 export zero!, donothing, default_allocator
@@ -57,4 +62,4 @@ function return!(cache::ObjectCache{T}, x::T) where {T}
     Base.@lock cache.lock push!(cache.cache, x)
 end
 
-end
+end # module

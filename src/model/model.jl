@@ -18,7 +18,6 @@ import DataStructures
 import Distributions
 import Flux
 import LoopVectorization
-import ManualMemory
 import NNlib
 import OneDNN
 import Polyester
@@ -35,7 +34,7 @@ cdiv(x, y) = 1 + div(x - 1, y)
 up_to_mul_of(x, y) = y * cdiv(x, y)
 
 include("interact.jl")
-include("embedding_update.jl")
+#include("embedding_update.jl")
 
 # Initialization
 function multithread_init(f, A)

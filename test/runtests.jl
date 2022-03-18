@@ -13,6 +13,8 @@ using Zygote
 
 const DATASET_DIR = joinpath(@__DIR__, "dataset")
 
+#include("utils.jl")
+
 # Model Pipeline
 include("model/interact.jl")
 include("model/model.jl")
