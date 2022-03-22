@@ -284,7 +284,7 @@ end
 function load!(
     labels, dense, sparse, vx::AbstractVector{DACRecord}; nthreads = Threads.nthreads()
 )
-    Polyester.@batch per=core for i in eachindex(vx)
+    Polyester.@batch per=thread for i in eachindex(vx)
     #for i in eachindex(labels, vx)
         # @inbounds record = vx[i]
         # @inbounds labels[i] = record.label

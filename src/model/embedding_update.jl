@@ -69,7 +69,7 @@ function process!(updater::BatchUpdater, opt, tables, updates, writeback_threads
     updater.done = false
 
     ref = ManualMemory.Reference(updater)
-    Polyester.@batch per=core for i in Base.OneTo(Threads.nthreads())
+    Polyester.@batch per=thread for i in Base.OneTo(Threads.nthreads())
         _updater = ManualMemory.dereference(ref)
 
         # Dispatch threads based on what task they are to perform.

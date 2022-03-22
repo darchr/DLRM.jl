@@ -254,7 +254,7 @@ function custom_update!(
     # Weight update - thread across all dense layers
     len = length(param_weights)
     index = Threads.Atomic{Int}(1)
-    @time Polyester.@batch (per = core) for _ in Base.OneTo(Threads.nthreads())
+    Polyester.@batch (per = thread) for _ in Base.OneTo(Threads.nthreads())
         while true
             local_index = Threads.atomic_add!(index, 1)
             local_index > len && break

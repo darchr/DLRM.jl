@@ -183,7 +183,7 @@ function triangular_slice(X::AbstractArray{T,3}) where {T}
     ncols = div((sz * sz) - sz, 2)
 
     O = similar(X, eltype(X), ncols, batchsize)
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per=thread for batch in Base.OneTo(batchsize)
         vX = view(X, :, :, batch)
         vO = view(O, :, batch)
         triangular_slice_kernel!(vO, vX)
@@ -196,7 +196,7 @@ end
 function triangular_slice_back(Δ::AbstractMatrix, sz::NTuple{3,Int})
     A = similar(Δ, eltype(Δ), sz)
     batchsize = sz[3]
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per=thread for batch in Base.OneTo(batchsize)
         vA = view(A, :, :, batch)
         vΔ = view(Δ, :, batch)
         triangular_slice_back_kernel!(vA, vΔ)
@@ -329,7 +329,7 @@ end
 function sumavx(a, b)
     c = similar(a)
     # Manually unroll "eachindex/CartesianIndices" to help Polyester work correctly.
-    Polyester.@batch for j in axes(c, 2), i in axes(c, 1)
+    Polyester.@batch per=thread for j in axes(c, 2), i in axes(c, 1)
         c[i, j] = a[i, j] + b[i, j]
     end
     return c
@@ -457,7 +457,7 @@ function process_batches(dot::DotInteraction, T, x)
     dst = similar(x, eltype(x), (padded_size, batchsize))
     init!(dot, sz)
 
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per=thread for batch in Base.OneTo(batchsize)
         vT = view(T, :, :, batch)
         vdst = view(dst, :, batch)
         vx = view(x, :, batch)
@@ -474,7 +474,7 @@ function process_batches_back(dot::DotInteraction, Δ::AbstractMatrix{T}, t, xle
     remainder = view(Δ, (xlen + 1):(size(Δ, 1) - padding), :)
 
     dt = similar(Δ, T, size(t))
-    Polyester.@batch per=core for batch in Base.OneTo(batchsize)
+    Polyester.@batch per=thread for batch in Base.OneTo(batchsize)
         # Now, reverse the triangular slice
         scratch = dot[]
 
