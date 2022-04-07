@@ -193,7 +193,7 @@ function train!(
     opt;
     cb = () -> (),
     maxiters = nothing,
-    embedding_threads = Threads.nthreads(),
+    embedding_threads = 12,
 )
     # Run once to make sure data formats are initialized.
     _ = Zygote.gradient(loss, model, first(data)...)
@@ -240,7 +240,7 @@ function train!(
 end
 
 function custom_update!(
-    opt, params::DLRMParams, grads::DLRMGrads, telemetry = donothing; embedding_threads = Threads.nthreads()
+    opt, params::DLRMParams, grads::DLRMGrads, telemetry = donothing; embedding_threads = 12,
 )
     # Weight Update
     param_weights = params.weights
