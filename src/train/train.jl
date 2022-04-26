@@ -111,7 +111,7 @@ struct DLRMParams{W,B,E}
     # Embedding tables and pre-allocated dictionaries for doing the pre-compression
     # before embedding table update.
     embeddings::Vector{E}
-    indexers::Vector{EmbeddingTables.Indexer}
+    indexers::Vector{EmbeddingTables.SparseIndexer}
 end
 
 mantissa_trick(::DLRMParams{<:Any,Nothing}) = false
@@ -125,7 +125,7 @@ function DLRMParams(model)
 
     B = typeof(first(model.bottom_mlp).bias)
     E = eltype(model.embeddings)
-    params = DLRMParams(W[], B[], E[], EmbeddingTables.Indexer[])
+    params = DLRMParams(W[], B[], E[], EmbeddingTables.SparseIndexer[])
     gather!(params, model)
     return params
 end
@@ -276,7 +276,7 @@ function custom_update!(
     (; indexers) = params
     if isempty(indexers)
         for _ in eachindex(param_embeddings)
-            push!(indexers, EmbeddingTables.Indexer())
+            push!(indexers, EmbeddingTables.SparseIndexer())
         end
     end
 
